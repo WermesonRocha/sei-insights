@@ -122,10 +122,11 @@ de documentos via JS. A leitura captura, para cada nó da árvore:
 5. se não houver nenhum nó de série "Despacho", a situação do processo é
    **"Sem despacho público"** — sem download, sem análise, sem erro.
 
-## 7. Download e extração de texto (módulos `download`/`text_ing`)
+## 7. Download e extração de texto (`text_ing`)
 
 - Baixa **somente o documento do último Despacho**, usando o link público
   (`md_pesq_documento_consulta_externa.php`) entregue pela própria árvore;
+  o download usa o código do `sei_client` copiado do coletor;
 - regras de download copiadas do coletor (`context.request`, rate limit,
   retries, `.part`, SHA-256, MIME);
 - extração de texto com **pypdf**;
@@ -291,4 +292,4 @@ Padrão dos argumentos de validação copiado do coletor
 - LLM / busca semântica / RAG;
 - lista complementar de números mantida pelo usuário;
 - agendamento automático (Task Scheduler);
-- destinação/notificação (e-mail, dashboards).
+- notificação/alertas (e-mail, dashboards).
