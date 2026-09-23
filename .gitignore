@@ -3,3 +3,4 @@ downloads/
 *.xlsx
 __pycache__/
 .venv/
+.playwright-mcp
