@@ -21,10 +21,8 @@ class RateLimiter:
         elapsed = now - self._last_request
         remaining = target - elapsed
         if remaining > 0:
-            before_sleep = time.monotonic()
             time.sleep(remaining)
-            after_sleep = time.monotonic()
-        self._last_request = now
+        self._last_request = time.monotonic()
 
     def wait_seconds(self, seconds: float) -> None:
         time.sleep(seconds)
