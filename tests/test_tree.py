@@ -58,7 +58,7 @@ class TreeTest(unittest.TestCase):
         nodes = parse_tree(HTML.replace("15/09/2026", "?"))
         d = select_last_despacho(nodes)
         self.assertIsNotNone(d)
-        self.assertEqual(d.numero, "100003")
+        self.assertEqual(d.numero, "100002")
 
     def test_sem_despacho_retorna_none(self):
         html = HTML.replace("Despacho 100002 - 10/09/2026", "Nota Técnica 100002 - 10/09/2026") \

@@ -22,8 +22,11 @@ class DocNode:
 def parse_tree(html: str) -> list[DocNode]:
     """Calibrado com o spike (Task 1). Default lê `li`/`tr` com rótulo."""
     soup = BeautifulSoup(html, "html.parser")
+    container = soup.select_one(".infraArvore")
+    if container is None:
+        container = soup
     nodes: list[DocNode] = []
-    for pos, row in enumerate(soup.select("li, tr")):
+    for pos, row in enumerate(container.select("li, tr")):
         label_el = row.select_one("span.infraLabel, label, a[title]")
         label = ""
         if label_el is not None:
@@ -71,7 +74,7 @@ def correlate_urls(nodes: list[DocNode], links: list[tuple[str, str]]) -> list[D
 
 
 def _corresponds_to_numbered(label: str) -> bool:
-    from bs4 import BeautifulSoup as _BS  # noqa: keep pure
+    """Return True if label does NOT contain a document number (for fallback links)."""
     return NUM_RE.search(label) is None
 
 
@@ -79,4 +82,9 @@ def select_last_despacho(nodes: list[DocNode]) -> Optional[DocNode]:
     despachos = [n for n in nodes if "Despacho" in n.serie]
     if not despachos:
         return None
-    return max(despachos, key=lambda n: (n.data or "9999/99/9999", n.posicao))
+    dated = [d for d in despachos if d.data]
+    if dated:
+        max_date = max(d.data for d in dated)
+        candidates = [d for d in dated if d.data == max_date]
+        return max(candidates, key=lambda n: n.posicao)
+    return max(despachos, key=lambda n: n.posicao)
