@@ -151,24 +151,25 @@ copiado do coletor de origem.
 
 ## Estrutura do projeto
 
-| Arquivo / pasta              | Função                                                          |
-| ---------------------------- | --------------------------------------------------------------- |
-| `pyproject.toml`             | Metadados do pacote e comando `sei-insights` (deps via `requirements.txt`). |
-| `src/sei_insights/cli.py`    | CLI e orquestração (argumentos, `build_rows`, espelho).         |
-| `src/sei_insights/sei_client.py` | Cliente da Pesquisa Pública (pesquisa, processo, CAPTCHA, download). |
-| `src/sei_insights/discovery.py`  | Parsing da resposta AJAX, paginação, dedupe.                |
-| `src/sei_insights/tree.py`       | Leitura da árvore de documentos, correlação nó → URL, último Despacho. |
-| `src/sei_insights/text_ing.py`   | Extração de texto de PDF via `pypdf`.                       |
-| `src/sei_insights/rules.py`      | Motor de regras determinístico (lê `regras.json`).          |
-| `regras.json`                    | Lista ordenada de regras de classificação (editável).       |
-| `src/sei_insights/store.py`      | Espelho SQLite da planilha (`MirrorStore`).                 |
-| `src/sei_insights/report.py`     | Geração da planilha XLSX (abas principal, Novos, Resumo).   |
-| `src/sei_insights/captcha_solver.py` | Resolução de CAPTCHA por OCR (`ddddocr`), com retry.    |
-| `src/sei_insights/rate_limit.py`    | Pausa aleatória entre requisições (2–5s, configurável).  |
-| `src/sei_insights/utils.py`         | Apoio: normalização de número, SHA-256, MIME, nomes seguros. |
-| `requirements.txt`            | Dependências Python do projeto (fonte única).                  |
-| `tests/`                      | Testes automatizados (`unittest`).                              |
-| `.state/`                     | Banco SQLite espelho + diagnósticos (gerado).                   |
+| Arquivo / pasta                          | Função                                                            |
+| ---------------------------------------- | ----------------------------------------------------------------- |
+| `pyproject.toml`                         | Metadados do pacote e comando `sei-insights` (deps via `requirements.txt`). |
+| `src/sei_insights/cli.py`                | CLI e orquestração (argumentos, `build_rows`, espelho).           |
+| `src/sei_insights/config/__init__.py`    | Configuração central: caminhos (`.state`, `regras.json`) e padrões do CLI. |
+| `src/sei_insights/config/rules.py`       | Motor de regras determinístico (lê `regras.json`).                |
+| `regras.json`                            | Lista ordenada de regras de classificação (editável).             |
+| `src/sei_insights/clients/sei_client.py` | Cliente da Pesquisa Pública (pesquisa, processo, CAPTCHA, download). |
+| `src/sei_insights/clients/discovery.py`  | Parsing da resposta AJAX, paginação, dedupe.                      |
+| `src/sei_insights/clients/rate_limit.py` | Pausa aleatória entre requisições (2–5s, configurável).            |
+| `src/sei_insights/clients/captcha_solver.py` | Resolução de CAPTCHA por OCR (`ddddocr`), com retry.          |
+| `src/sei_insights/documents/tree.py`     | Leitura da árvore de documentos, correlação nó → URL, último Despacho. |
+| `src/sei_insights/documents/text_ing.py` | Extração de texto de PDF via `pypdf`.                             |
+| `src/sei_insights/storage/mirror.py`     | Espelho SQLite da planilha (`MirrorStore`).                        |
+| `src/sei_insights/storage/report.py`     | Geração da planilha XLSX (abas principal, Novos, Resumo).         |
+| `src/sei_insights/utils/helpers.py`      | Apoio: normalização de número, SHA-256, MIME, nomes seguros.      |
+| `requirements.txt`                       | Dependências Python do projeto (fonte única).                     |
+| `tests/`                                 | Testes automatizados (`unittest`).                                 |
+| `.state/`                                | Banco SQLite espelho + diagnósticos (gerado).                      |
 
 > As pastas `.state/` e os arquivos `*.xlsx` são criados pelo programa e
 > não devem ser versionados.
