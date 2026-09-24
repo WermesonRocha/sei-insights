@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from rules import RulesEngine
 
@@ -50,3 +51,13 @@ class RulesTest(unittest.TestCase):
         engine = RulesEngine(REGRA_DETRAN)
         r = engine.classify("Texto irrelevante sem padrão conhecido.")
         self.assertEqual(r.situacao, "Em análise")
+
+    def test_regras_json_captura_destino_generico(self):
+        engine = RulesEngine.from_file(Path("regras.json"))
+        r = engine.classify(
+            "Diante do exposto, encaminham-se os autos a Subsecretaria de Gestão "
+            "e Administração, para análise e adoção das providências necessárias."
+        )
+        self.assertEqual(r.destino, "Subsecretaria de Gestão e Administração")
+        self.assertNotIn("\x01", r.situacao)
+        self.assertTrue(r.situacao.startswith("Encaminhado a "))

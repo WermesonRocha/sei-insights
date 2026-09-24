@@ -57,7 +57,7 @@
     },
     {
       "pattern": "(?:encaminha[\\- ]?se|remete[\\- ]?se|encaminham[\\- ]?se|remetem[\\- ]?se)\\s+(?:os autos[\\s\\S]*?\\b)?(?:à|a|para)\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s+para|\\s*$)",
-      "situacao": "Encaminhado a \u0001",
+      "situacao": "Encaminhado a \\1",
       "destino": "\\1",
       "acao_esperada": "análise e providências",
       "pendencia_curta": "Processo encaminhado para análise/providências"
