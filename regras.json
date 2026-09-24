@@ -1,0 +1,38 @@
+{
+  "fallback": {
+    "situacao": "Em análise",
+    "destino": "",
+    "acao_esperada": "",
+    "pendencia_curta": ""
+  },
+  "regras": [
+    {
+      "pattern": "para assinatura",
+      "situacao": "Pendente de assinatura",
+      "destino": "",
+      "acao_esperada": "assinatura",
+      "pendencia_curta": "Aguardando assinatura do documento"
+    },
+    {
+      "pattern": "(?:aguardando retorno|retorno a (?:esta|essa)?\\s*([A-Za-zÀ-ÿ]+))",
+      "situacao": "Aguardando retorno",
+      "destino": "\\1",
+      "acao_esperada": "retorno",
+      "pendencia_curta": "Aguardando retorno do destinatário"
+    },
+    {
+      "pattern": "DETRAN",
+      "situacao": "Encaminhado a órgão externo (Detran/DF)",
+      "destino": "Detran/DF",
+      "acao_esperada": "providências",
+      "pendencia_curta": "Detran/DF analisar e adotar providências"
+    },
+    {
+      "pattern": "\\b(SGA|CCL|CTI|SG)\\b",
+      "situacao": "Em \\1",
+      "destino": "\\1",
+      "acao_esperada": "análise",
+      "pendencia_curta": "Processo com o destino para análise/próximo passo"
+    }
+  ]
+}
