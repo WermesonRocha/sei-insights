@@ -5,7 +5,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
-from sei_insights.utils import normalize_process_number
+from sei_insights.utils.helpers import normalize_process_number
 
 
 def parse_response(data: dict) -> list[str]:

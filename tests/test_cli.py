@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 
 from sei_insights.cli import build_rows, now_str, parse_arguments
-from sei_insights.sei_client import ProcessResult
-from sei_insights.store import ProcessRow
+from sei_insights.clients.sei_client import ProcessResult
+from sei_insights.storage.mirror import ProcessRow
 
 
 def row(numero: str, situacao: str = "Na CTI", hash_: str = "h") -> ProcessRow:
@@ -107,7 +107,7 @@ class ArgParseTest(unittest.TestCase):
 
 class EmptyResultTest(unittest.TestCase):
     def test_calcula_resumo_vazio_sem_erro(self):
-        from sei_insights.report import build_resumo
+        from sei_insights.storage.report import build_resumo
         resumo = build_resumo([], [])
         self.assertEqual(resumo["total"], 0)
         self.assertEqual(resumo["novos"], 0)

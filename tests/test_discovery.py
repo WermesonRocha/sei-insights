@@ -1,6 +1,6 @@
 import unittest
 
-from sei_insights.discovery import expected_total, pagination_params, parse_response
+from sei_insights.clients.discovery import expected_total, pagination_params, parse_response
 
 ROW1 = ("<tr data-prot='21260.003436/2026-15'>"
         "<td><a href='md_pesq_processo_exibir.php?id=1'>Proc 1</a></td></tr>")

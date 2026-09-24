@@ -8,16 +8,17 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
-from sei_insights.discovery import expected_total, pagination_params, parse_response
-from sei_insights.rate_limit import RateLimiter
-from sei_insights.utils import normalize_process_number, safe_filename, calculate_sha256, extension_from_content_type, looks_like_html, unique_path
+from sei_insights.config import DEFAULT_TIMEOUT_MS
+
+from sei_insights.clients.discovery import expected_total, pagination_params, parse_response
+from sei_insights.clients.rate_limit import RateLimiter
+from sei_insights.utils.helpers import normalize_process_number, safe_filename, calculate_sha256, extension_from_content_type, looks_like_html, unique_path
 
 logger = logging.getLogger("sei-insights")
 
 BASE_URL = "https://colaboragov.sei.gov.br/sei/"
 PUBLIC_SEARCH_URL = "https://colaboragov.sei.gov.br/sei/modulos/pesquisa/md_pesq_processo_pesquisar.php?acao_externa=protocolo_pesquisar&acao_origem_externa=protocolo_pesquisar&id_orgao_acesso_externo=7"
 SEARCH_PAGE_SIZE = 50
-DEFAULT_TIMEOUT_MS = 90_000
 MAX_RETRIES = 3
 SEARCH_RESULT_DELAY_MS = 1000
 

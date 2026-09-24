@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from sei_insights.rules import RulesEngine
+from sei_insights.config.rules import RulesEngine
 
 REGRA_DETRAN = [
     {
