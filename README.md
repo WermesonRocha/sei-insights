@@ -151,23 +151,24 @@ copiado do coletor de origem.
 
 ## Estrutura do projeto
 
-| Arquivo / pasta             | Função                                                          |
-| --------------------------- | --------------------------------------------------------------- |
-| `main.py`                   | CLI e orquestração (argumentos, `build_rows`, espelho).         |
-| `sei_client.py`             | Cliente da Pesquisa Pública (pesquisa, processo, CAPTCHA, download). |
-| `discovery.py`              | Parsing da resposta AJAX, paginação, dedupe.                    |
-| `tree.py`                   | Leitura da árvore de documentos, correlação nó → URL, último Despacho. |
-| `text_ing.py`               | Extração de texto de PDF via `pypdf`.                           |
-| `rules.py`                  | Motor de regras determinístico (lê `regras.json`).              |
-| `regras.json`               | Lista ordenada de regras de classificação (editável).           |
-| `store.py`                  | Espelho SQLite do espelho da planilha (`MirrorStore`).          |
-| `report.py`                 | Geração da planilha XLSX (abas principal, Novos, Resumo).       |
-| `captcha_solver.py`         | Resolução de CAPTCHA por OCR (`ddddocr`), com retry.            |
-| `rate_limit.py`             | Pausa aleatória entre requisições (2–5s, configurável).         |
-| `utils.py`                  | Apoio: normalização de número, SHA-256, MIME, nomes seguros.    |
-| `requirements.txt`          | Dependências Python do projeto.                                 |
-| `tests/`                    | Testes automatizados (`unittest`).                              |
-| `.state/`                   | Banco SQLite espelho + diagnósticos (gerado).                   |
+| Arquivo / pasta              | Função                                                          |
+| ---------------------------- | --------------------------------------------------------------- |
+| `pyproject.toml`             | Metadados do pacote e comando `sei-insights` (deps via `requirements.txt`). |
+| `src/sei_insights/cli.py`    | CLI e orquestração (argumentos, `build_rows`, espelho).         |
+| `src/sei_insights/sei_client.py` | Cliente da Pesquisa Pública (pesquisa, processo, CAPTCHA, download). |
+| `src/sei_insights/discovery.py`  | Parsing da resposta AJAX, paginação, dedupe.                |
+| `src/sei_insights/tree.py`       | Leitura da árvore de documentos, correlação nó → URL, último Despacho. |
+| `src/sei_insights/text_ing.py`   | Extração de texto de PDF via `pypdf`.                       |
+| `src/sei_insights/rules.py`      | Motor de regras determinístico (lê `regras.json`).          |
+| `regras.json`                    | Lista ordenada de regras de classificação (editável).       |
+| `src/sei_insights/store.py`      | Espelho SQLite da planilha (`MirrorStore`).                 |
+| `src/sei_insights/report.py`     | Geração da planilha XLSX (abas principal, Novos, Resumo).   |
+| `src/sei_insights/captcha_solver.py` | Resolução de CAPTCHA por OCR (`ddddocr`), com retry.    |
+| `src/sei_insights/rate_limit.py`    | Pausa aleatória entre requisições (2–5s, configurável).  |
+| `src/sei_insights/utils.py`         | Apoio: normalização de número, SHA-256, MIME, nomes seguros. |
+| `requirements.txt`            | Dependências Python do projeto (fonte única).                  |
+| `tests/`                      | Testes automatizados (`unittest`).                              |
+| `.state/`                     | Banco SQLite espelho + diagnósticos (gerado).                   |
 
 > As pastas `.state/` e os arquivos `*.xlsx` são criados pelo programa e
 > não devem ser versionados.
@@ -223,6 +224,7 @@ sistema. Clique na aba do seu sistema operacional para ver os passos:
 
    ```powershell
    pip install -r requirements.txt
+   pip install -e .
    ```
 
 5. Instale o navegador Chromium usado pelo Playwright:
@@ -267,6 +269,7 @@ sistema. Clique na aba do seu sistema operacional para ver os passos:
 
    ```bash
    pip install -r requirements.txt
+   pip install -e .
    ```
 
 4. Instale o navegador e as dependências de sistema necessárias:
@@ -306,6 +309,7 @@ sistema. Clique na aba do seu sistema operacional para ver os passos:
 
    ```bash
    pip install -r requirements.txt
+   pip install -e .
    ```
 
 4. Instale o navegador:
@@ -334,10 +338,10 @@ sistema. Clique na aba do seu sistema operacional para ver os passos:
 
 ## Executando o programa
 
-Na pasta do projeto, com o ambiente virtual ativado:
+Na pasta do projeto, com o ambiente virtual ativado: (o comando `sei-insights` é equivalente e também está disponível após `pip install -e .`; sem o install, `python -m sei_insights` falha com `ModuleNotFoundError`).
 
 ```bash
-python main.py
+python -m sei_insights
 ```
 
 O programa descobre os processos públicos da unidade no período
@@ -363,22 +367,22 @@ configurado, classifica cada um e grava `sei_insights.xlsx` + o espelho
 
 ```bash
 # Execução padrão (últimos 7 dias)
-python main.py
+python -m sei_insights
 
 # Janela maior
-python main.py --dias 14
+python -m sei_insights --dias 14
 
 # Período explícito
-python main.py --inicio 01/09/2026 --fim 22/09/2026
+python -m sei_insights --inicio 01/09/2026 --fim 22/09/2026
 
 # Outra unidade e CAPTCHA manual
-python main.py --unidade "MMULHERES-SE-SGA-CGATI-CTI-DTI" --manual-captcha
+python -m sei_insights --unidade "MMULHERES-SE-SGA-CGATI-CTI-DTI" --manual-captcha
 
 # Ritmo mais lento (menos pressão no servidor) + força reanálise
-python main.py --min-delay 3 --max-delay 7 --force
+python -m sei_insights --min-delay 3 --max-delay 7 --force
 
 # Planilha em outro caminho
-python main.py --saida relatorios/setembro.xlsx
+python -m sei_insights --saida relatorios/setembro.xlsx
 ```
 
 > **CAPTCHA manual:** quando ativo, preencha o CAPTCHA **no navegador**.
@@ -572,7 +576,7 @@ A forma mais simples de reanalisar todos os processos da janela,
 ignorando o cache de hash:
 
 ```bash
-python main.py --force
+python -m sei_insights --force
 ```
 
 Nada é excluído: o `--force` apenas força a reanálise. O espelho é
@@ -601,7 +605,7 @@ rmdir /s /q .state
 rm -rf .state
 ```
 
-Após isso, execute `python main.py` novamente: todos os processos da
+Após isso, execute `python -m sei_insights` novamente: todos os processos da
 janela serão tratados como novos.
 
 ### Limpar com o cliente SQLite
@@ -680,7 +684,10 @@ salvos em `.state/debug/` para diagnóstico.
 
 ## Testes
 
-A suíte usa apenas a biblioteca padrão (`unittest`):
+A suíte usa apenas a biblioteca padrão (`unittest`). É preciso ter o pacote
+instalado (veja [Instalação das dependências](#instalação-das-dependências),
+que inclui `pip install -e .`) e rodar **a partir da raiz do repositório**
+(os testes leem `regras.json` relativo ao diretório atual):
 
 ```bash
 python -m unittest discover -s tests -v
