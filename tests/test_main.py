@@ -30,14 +30,16 @@ class BuildRowsTest(unittest.TestCase):
         self.assertEqual(rows[0].situacao, "Nova análise")
 
     def test_com_cache_nao_reanalisa(self):
+        """Se hash não mudou, analyze é chamado mas dados do cache são preservados."""
         calls = []
         def analyze(p, prev, force, now):
             calls.append(p.number)
             return row(p.number, "Cache", prev.hash_ultimo_despacho if prev else "h")
         previous = {"001": row("001", "Guardada", "h")}
         rows, novos = build_rows(previous, [pr("001")], analyze, False, now_str())
-        self.assertEqual(calls, [])
-        self.assertEqual(rows[0].situacao, "Guardada")
+        self.assertEqual(calls, ["001"])  # analyze chamado para obter hash
+        self.assertEqual(rows[0].situacao, "Guardada")  # mas situação do cache preservada
+        self.assertEqual(rows[0].data_analise, "2026-09-21 10:00:00")  # data_analise original
         self.assertEqual(novos, [])
 
     def test_force_reanalisa_mesmo_com_cache(self):
@@ -49,6 +51,32 @@ class BuildRowsTest(unittest.TestCase):
                              [pr("001")], analyze, True, now_str())
         self.assertEqual(calls, ["001"])
         self.assertEqual(rows[0].situacao, "Nova")
+
+    def test_hash_mudou_reanalisa(self):
+        """Se hash do último despacho mudou (novo despacho), deve re-analisar."""
+        calls = []
+        def analyze(p, prev, force, now):
+            calls.append(p.number)
+            return row(p.number, "Novo despacho", "h_novo")
+        previous = {"001": row("001", "Antigo", "h_antigo")}
+        rows, novos = build_rows(previous, [pr("001")], analyze, False, now_str())
+        self.assertEqual(calls, ["001"])
+        self.assertEqual(rows[0].situacao, "Novo despacho")
+        self.assertEqual(rows[0].hash_ultimo_despacho, "h_novo")
+        self.assertEqual(novos, [])  # não é novo processo, só atualizado
+
+    def test_hash_igual_usa_cache(self):
+        """Se hash do último despacho não mudou, usa cache (preserva data_analise original)."""
+        calls = []
+        def analyze(p, prev, force, now):
+            calls.append(p.number)
+            return row(p.number, "Não deveria ser usado", "h_mesmo")
+        previous = {"001": row("001", "Cache", "h_mesmo")}
+        rows, novos = build_rows(previous, [pr("001")], analyze, False, now_str())
+        self.assertEqual(calls, ["001"])  # analyze chamado para obter hash
+        self.assertEqual(rows[0].situacao, "Cache")  # mas situação do cache preservada
+        self.assertEqual(rows[0].data_analise, "2026-09-21 10:00:00")  # data original preservada
+        self.assertEqual(novos, [])
 
     def test_erro_vira_linha_nao_bloqueia(self):
         def analyze(p, prev, force, now):

@@ -59,15 +59,33 @@ def build_rows(
     for p in found:
         prev = previous.get(p.number)
         row = None
-        # Skip analyze if cached and not forced
+        # Skip analyze if cached, not forced, AND hash matches (same last despacho)
         if prev is not None and not force:
-            row = ProcessRow(
-                numero=p.number, titulo=p.title, data_execucao=now,
-                data_analise=prev.data_analise, data_ultimo_despacho=prev.data_ultimo_despacho,
-                situacao=prev.situacao, destino=prev.destino, acao_esperada=prev.acao_esperada,
-                pendencia_curta=prev.pendencia_curta, link_process=p.url,
-                status_coleta="concluído (cache)", hash_ultimo_despacho=prev.hash_ultimo_despacho,
-            )
+            # analyze() should return a row with updated hash_ultimo_despacho
+            # We call analyze to get the current hash, but if it matches prev, we keep cached data
+            try:
+                current_row = analyze(p, prev, force, now)
+                if current_row.hash_ultimo_despacho == prev.hash_ultimo_despacho:
+                    # Hash unchanged: use cached data, preserve original analysis date
+                    row = ProcessRow(
+                        numero=p.number, titulo=p.title, data_execucao=now,
+                        data_analise=prev.data_analise, data_ultimo_despacho=prev.data_ultimo_despacho,
+                        situacao=prev.situacao, destino=prev.destino, acao_esperada=prev.acao_esperada,
+                        pendencia_curta=prev.pendencia_curta, link_process=p.url,
+                        status_coleta="concluído (cache)", hash_ultimo_despacho=prev.hash_ultimo_despacho,
+                    )
+                else:
+                    # Hash changed (new despacho): use fresh analysis
+                    row = current_row
+            except Exception as exc:
+                logger.warning("Erro ao analisar %s: %s", p.number, exc)
+                row = ProcessRow(
+                    numero=p.number, titulo=p.title, data_execucao=now,
+                    data_analise=now, data_ultimo_despacho="",
+                    situacao="Erro / retry", destino="", acao_esperada="",
+                    pendencia_curta="", link_process=p.url,
+                    status_coleta=f"erro: {exc}", hash_ultimo_despacho="",
+                )
         else:
             try:
                 row = analyze(p, prev, force, now)
