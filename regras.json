@@ -7,32 +7,109 @@
   },
   "regras": [
     {
-      "pattern": "para assinatura",
+      "pattern": "(?:para|aguardando|pendente de)\\s+assinatura",
       "situacao": "Pendente de assinatura",
       "destino": "",
       "acao_esperada": "assinatura",
       "pendencia_curta": "Aguardando assinatura do documento"
     },
     {
-      "pattern": "(?:aguardando retorno|retorno a (?:esta|essa)?\\s*([A-Za-zÀ-ÿ]+))",
+      "pattern": "(?:retorno a|aguardando retorno de|retorno para)\\s+(?:esta|essa|a)\\s*([A-Za-zÀ-ÿ\\s]+?)(?:,|\\.|\\s+para|\\s*$)",
       "situacao": "Aguardando retorno",
       "destino": "\\1",
       "acao_esperada": "retorno",
       "pendencia_curta": "Aguardando retorno do destinatário"
     },
     {
-      "pattern": "DETRAN",
-      "situacao": "Encaminhado a órgão externo (Detran/DF)",
-      "destino": "Detran/DF",
-      "acao_esperada": "providências",
-      "pendencia_curta": "Detran/DF analisar e adotar providências"
+      "pattern": "(?:encaminha[\\- ]?se|remete[\\- ]?se|encaminham[\\- ]?se|remetem[\\- ]?se)\\s+(?:os autos[\\s\\S]*?\\b)?(?:à|a|para)\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s+para|\\s*$)",
+      "situacao": "Encaminhado a \\1",
+      "destino": "\\1",
+      "acao_esperada": "análise e providências",
+      "pendencia_curta": "Processo encaminhado para análise/providências"
     },
     {
-      "pattern": "\\b(SGA|CCL|CTI|SG)\\b",
+      "pattern": "(?:para|com vistas a)\\s+(?:ciência|análise|manifestação|parecer|providências)\\s+(?:da|do|de)\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s*$)",
+      "situacao": "Aguardando \\2 de \\1",
+      "destino": "\\1",
+      "acao_esperada": "\\2",
+      "pendencia_curta": "Aguardando \\2 de \\1"
+    },
+    {
+      "pattern": "(?:determino|determina[\\- ]?se|determinam[\\- ]?se)\\s+o\\s+arquivamento",
+      "situacao": "Arquivado",
+      "destino": "",
+      "acao_esperada": "arquivamento",
+      "pendencia_curta": "Processo determinado para arquivamento"
+    },
+    {
+      "pattern": "(?:arquive[\\- ]?se|pelo arquivamento|determino arquivamento)",
+      "situacao": "Arquivado",
+      "destino": "",
+      "acao_esperada": "arquivamento",
+      "pendencia_curta": "Processo arquivado"
+    },
+    {
+      "pattern": "(?:devolva[\\- ]?se|devolvam[\\- ]?se|devolução dos autos)",
+      "situacao": "Devolvido",
+      "destino": "",
+      "acao_esperada": "devolução",
+      "pendencia_curta": "Processo devolvido à unidade de origem"
+    },
+    {
+      "pattern": "(?:converta[\\- ]?se|transforme[\\- ]?se|conversão em|transformação em)\\s+(?:ofício|nota técnica|memorial|termo)",
+      "situacao": "Em conversão/transformação",
+      "destino": "",
+      "acao_esperada": "conversão de documento",
+      "pendencia_curta": "Aguardando conversão/transformação do documento"
+    },
+    {
+      "pattern": "(?:d[êe][\\- ]?se\\s+ciência|cientifique[\\- ]?se|para ciência\\s+(?:da|do|de))\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s*$)",
+      "situacao": "Para ciência de \\1",
+      "destino": "\\1",
+      "acao_esperada": "ciência",
+      "pendencia_curta": "Aguardando ciência de \\1"
+    },
+    {
+      "pattern": "(?:adote[\\- ]?se|providencie[\\- ]?se|adotar providências|tomar providências)\\s+(?:as|as devidas|as necessárias)?\\s*(?:por)?\\s*([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s*$)",
+      "situacao": "Aguardando providências de \\1",
+      "destino": "\\1",
+      "acao_esperada": "providências",
+      "pendencia_curta": "Aguardando providências de \\1"
+    },
+    {
+      "pattern": "(?:no prazo de|em até|prazo de)\\s+(\\d+)\\s*(?:dias?|horas?|meses?)",
+      "situacao": "Com prazo (\\1 dias)",
+      "destino": "",
+      "acao_esperada": "cumprimento no prazo",
+      "pendencia_curta": "Processo com prazo de \\1 dias para cumprimento"
+    },
+    {
+      "pattern": "\\b(defiro|indefiro|parcialmente procedente|improcedente|procedente)\\b",
+      "situacao": "Decisão: \\1",
+      "destino": "",
+      "acao_esperada": "cumprimento da decisão",
+      "pendencia_curta": "Decisão proferida: \\1"
+    },
+    {
+      "pattern": "(?:cumpra[\\- ]?se|para cumprimento|determino cumprimento)",
+      "situacao": "Para cumprimento",
+      "destino": "",
+      "acao_esperada": "cumprimento",
+      "pendencia_curta": "Aguardando cumprimento da determinação"
+    },
+    {
+      "pattern": "\\b(SGA|CCL|CTI|SCL|SG|COORDENA[ÇC][ÃA]O|DIRETORIA|SECRETARIA|SUPERINTEND[ÊE]NCIA|GER[ÊE]NCIA|ASSESSORIA|N[ÚU]CLEO|DIVIS[ÃA]O|DEPARTAMENTO)\\b",
       "situacao": "Em \\1",
       "destino": "\\1",
       "acao_esperada": "análise",
-      "pendencia_curta": "Processo com o destino para análise/próximo passo"
+      "pendencia_curta": "Processo com \\1 para análise/próximo passo"
+    },
+    {
+      "pattern": "(?:Minist[ée]rio P[úu]blico|Tribunal de Contas|Controladoria|Pol[íi]cia Federal|Receita Federal|INSS|AGU|PGFN|DPF|MPF|MPDFT|TCU|CGU|CGM)",
+      "situacao": "Encaminhado a órgão externo (\\1)",
+      "destino": "\\1",
+      "acao_esperada": "providências",
+      "pendencia_curta": "Órgão externo \\1 para análise/providências"
     }
   ]
 }
