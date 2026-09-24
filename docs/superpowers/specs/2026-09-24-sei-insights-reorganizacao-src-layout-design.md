@@ -25,12 +25,14 @@ No escopo:
 
 - mover os 11 módulos para `src/sei_insights/`;
 - renomear `main.py` → `cli.py` e criar `__main__.py`;
-- ajustar imports internos para `sei_insights.*`;
+- ajustar imports internos para `sei_insights.*`, incluindo os alvos de
+  `mock.patch`/`patch` nos testes (§4);
 - renomear `test_main.py` → `test_cli.py` e ajustar imports dos testes;
 - criar `pyproject.toml`;
+- atualizar o `.gitignore` (adiciona `*.egg-info/`, `build/`, `dist/`);
 - atualizar o README (tabela de estrutura, comandos de execução e teste).
 
-Fora de escopo (são deixados intocados):
+Fora de escopo (a não ser que seja necessário para a etapa de staging):
 
 - `.worktrees/sei-insights` (worktree em outro branch);
 - arquivos `SEI_ColaboraGov_handoff_context.*` (deletados no working tree);
@@ -38,6 +40,12 @@ Fora de escopo (são deixados intocados):
 - mudança de lógica de qualquer função/regra/constante;
 - comportamento de `regras.json` (permanece na raiz, config editável,
   resolução relativa ao CWD, como hoje).
+
+> **Staging:** o `git status` contém deleções não-rascunhadas
+> (`SEI_ColaboraGov_handoff_context.*`) e `.worktrees/` não rastreado. O
+> commit da reorganização deve usar staging direcionado
+> (`git add src/ tests/ pyproject.toml README.md .gitignore docs/`), nunca
+> `git add -A`.
 
 ## 3. Estrutura de destino
 
@@ -47,7 +55,8 @@ sei-insights/
 ├── README.md                   # atualizado
 ├── regras.json                 # mantido na raiz
 ├── requirements.txt            # mantido (fonte única de dependências)
-├── .gitignore                  # mantido
+├── .gitignore                  # atualizado (*.egg-info/, build/, dist/)
+├── docs/                       # mantido (spike + specs superpowers)
 ├── src/
 │   └── sei_insights/
 │       ├── __init__.py         # NOVO
@@ -87,6 +96,13 @@ sei-insights/
 
 - Imports internos: `from discovery import ...` → `from sei_insights.discovery import ...`;
   `from store import ProcessRow` → `from sei_insights.store import ProcessRow`; etc.
+- Alvos de `mock.patch`/`patch` nos testes são strings e também mudam:
+  `rate_limit.time.sleep` → `sei_insights.rate_limit.time.sleep` (idem
+  `random.uniform`, `time.monotonic`); `captcha_solver.CaptchaSolver.solve_from_base64`
+  → `sei_insights.captcha_solver.CaptchaSolver.solve_from_base64`.
+- `mock.patch("rate_limit...")` resolve o módulo por import; sem a reescrita,
+  os testes de `test_rate_limit.py` e `test_captcha_solver.py` quebram com
+  `ModuleNotFoundError`.
 - Nomes de funções/classes/constantes **não mudam** (`MirrorStore`, `RulesEngine`,
   `SeiClient`, `build_rows`, `now_str`, `parse_arguments`, `main`, `FIELDS`, ...).
 - `__main__.py` contém o bloco que antes era `if __name__ == "__main__"`:
@@ -121,16 +137,29 @@ where = ["src"]
 
 ## 6. Execução e testes
 
-- Execução: `python -m sei_insights` a partir da raiz do repositório; após
-  `pip install -e .`, também o comando `sei-insights`.
-- Testes: `pip install -e .` e depois `python -m unittest discover -s tests -v`.
-- O README é atualizado para documentar ambos.
+- **Pré-requisito:** `pip install -e .` (install editável) é **obrigatório** para
+  `python -m sei_insights` E para o comando `sei-insights`. Em src-layout a
+  pasta `src/` não fica no `sys.path` por padrão; sem o install, ambos falham com
+  `ModuleNotFoundError`. Hoje `python main.py` funciona sem instalar nada — esse
+  é o trade-off aceito do src-layout e deve ficar explícito no README.
+- Execução: `sei-insights <opções>` (após `pip install -e .`) ou
+  `python -m sei_insights <opções>`.
+- Testes: `pip install -e .` e depois `python -m unittest discover -s tests -v`,
+  **a partir da raiz do repositório** — `test_rules.py` lê `regras.json`
+  relativo ao CWD (comportamento inalterado, porém CWD-dependente).
+- O README é atualizado para documentar o pré-requisito de instalação e as
+  ordenações acima.
 
 ## 7. Verificação
 
-1. Antes da movimentação: rodar a suíte e registrar o resultado (base).
-2. Após: `pip install -e .` e rodar a mesma suíte — resultado idêntico.
-3. Diff de lógica: corpos das funções são cópias exatas; diferenças apenas em
+1. Antes da movimentação: rodar a suíte e registrar o resultado (base),
+   anotando os skips (`test_captcha_solver` pula se `ddddocr` ausente).
+2. Após: `pip install -e .` e rodar a mesma suíte — resultado idêntico
+   (mesmo conjunto de pass/skip/fail).
+3. `git status` limpo: `*.egg-info/`, `build/`, `dist/` ignorados pelo
+   `.gitignore`; nada de `.worktrees/` ou deleções de handoff no commit
+   (staging direcionado, §2).
+4. Diff de lógica: corpos das funções são cópias exatas; diferenças apenas em
    imports e no bloco `__main__`.
-4. Smoke test: `python -m sei_insights --help` a partir da raiz.
-5. README: tabela "Estrutura do projeto" e seção "Testes" atualizadas.
+5. Smoke test: `python -m sei_insights --help` a partir da raiz.
+6. README: tabela "Estrutura do projeto" e seção "Testes" atualizadas.
