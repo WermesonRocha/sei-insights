@@ -512,11 +512,11 @@ Expected:
 - [ ] **Passo 4: diff de lógica — corpos intactos**
 
 ```powershell
-git diff --stat 4879249..HEAD
-git diff 4879249..HEAD -- 'src/sei_insights/sei_client.py' 'src/sei_insights/discovery.py' 'src/sei_insights/report.py' 'src/sei_insights/utils.py' 'src/sei_insights/tree.py' 'src/sei_insights/text_ing.py' 'src/sei_insights/rules.py' 'src/sei_insights/store.py' 'src/sei_insights/captcha_solver.py' 'src/sei_insights/rate_limit.py'
+git diff --find-renames -M --name-status 4879249..HEAD
+git diff --find-renames -M 4879249..HEAD -- 'src/sei_insights/cli.py'
 ```
 
-Expected: `git diff --stat` mostra os renames (com detecção de rename do git); o segundo comando **não imprime diff nenhum** para os módulos renomeados (só rename → sem mudança de conteúdo). Para `cli.py`, o diff mostra apenas mudança de imports e remoção do bloco `__main__`/`import sys`.
+Expected: o primeiro comando lista os 11 módulos como renames — **`R100`** para `sei_client.py`, `discovery.py`, `tree.py`, `text_ing.py`, `rules.py`, `store.py`, `report.py`, `captcha_solver.py`, `rate_limit.py`, `utils.py` (conteúdo idêntico: 100% similarity) e **`R`** com modificação apenas para `cli.py` (antigo `main.py`). O segundo comando mostra em `cli.py` unicamente: mudança dos imports (prefixo `sei_insights.`) e remoção do bloco `if __name__ == "__main__"` + `import sys`. Nenhum outro diff de conteúdo nos módulos.
 
 - [ ] **Passo 5: resumo final**
 
