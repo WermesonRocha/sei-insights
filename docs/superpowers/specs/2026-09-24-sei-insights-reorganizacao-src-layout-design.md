@@ -29,7 +29,8 @@ No escopo:
   `mock.patch`/`patch` nos testes (§4);
 - renomear `test_main.py` → `test_cli.py` e ajustar imports dos testes;
 - criar `pyproject.toml`;
-- atualizar o `.gitignore` (adiciona `*.egg-info/`, `build/`, `dist/`);
+- atualizar o `.gitignore` (acrescenta `*.egg-info/`, `build/`, `dist/` às 6
+  entradas atuais);
 - atualizar o README (tabela de estrutura, comandos de execução e teste).
 
 Fora de escopo (a não ser que seja necessário para a etapa de staging):
@@ -42,10 +43,15 @@ Fora de escopo (a não ser que seja necessário para a etapa de staging):
   resolução relativa ao CWD, como hoje).
 
 > **Staging:** o `git status` contém deleções não-rascunhadas
-> (`SEI_ColaboraGov_handoff_context.*`) e `.worktrees/` não rastreado. O
-> commit da reorganização deve usar staging direcionado
-> (`git add src/ tests/ pyproject.toml README.md .gitignore docs/`), nunca
-> `git add -A`.
+> (`SEI_ColaboraGov_handoff_context.*`) e `.worktrees/` não rastreado. Para o
+> commit da reorganização, nunca use `git add -A` nem `git add -u .` (ambos
+> re-encenariam as deleções de handoff). Em vez disso:
+> - `git mv` para cada um dos 11 módulos (ex.: `git mv main.py src/sei_insights/cli.py`,
+>   `git mv sei_client.py src/sei_insights/sei_client.py`, ...) e para
+>   `tests/test_main.py` → `tests/test_cli.py` — o `git mv` registra deleção +
+>   adição em um passo, garantindo que nenhum módulo antigo fique "órfão" na raiz;
+> - `git add` para os arquivos genuinamente novos (`src/sei_insights/__init__.py`,
+>   `__main__.py`, `pyproject.toml`) e modificados (`README.md`, `.gitignore`);
 
 ## 3. Estrutura de destino
 
@@ -96,6 +102,10 @@ sei-insights/
 
 - Imports internos: `from discovery import ...` → `from sei_insights.discovery import ...`;
   `from store import ProcessRow` → `from sei_insights.store import ProcessRow`; etc.
+- Exceção única à regra genérica: `tests/test_cli.py` (antigo `test_main.py`) tem
+  `from main import build_rows, now_str, parse_arguments` → `from sei_insights.cli import ...`
+  (o módulo `main` virou `cli`; a regra "from X → from sei_insights.X" produziria o
+  inexistente `sei_insights.main`).
 - Alvos de `mock.patch`/`patch` nos testes são strings e também mudam:
   `rate_limit.time.sleep` → `sei_insights.rate_limit.time.sleep` (idem
   `random.uniform`, `time.monotonic`); `captcha_solver.CaptchaSolver.solve_from_base64`
@@ -138,10 +148,11 @@ where = ["src"]
 ## 6. Execução e testes
 
 - **Pré-requisito:** `pip install -e .` (install editável) é **obrigatório** para
-  `python -m sei_insights` E para o comando `sei-insights`. Em src-layout a
-  pasta `src/` não fica no `sys.path` por padrão; sem o install, ambos falham com
-  `ModuleNotFoundError`. Hoje `python main.py` funciona sem instalar nada — esse
-  é o trade-off aceito do src-layout e deve ficar explícito no README.
+  `python -m sei_insights` (falha com `ModuleNotFoundError` sem ele) e para o
+  comando `sei-insights` (que **nem existe** sem o install). Em src-layout a pasta
+  `src/` não fica no `sys.path` por padrão. Hoje `python main.py` funciona sem
+  instalar nada — esse é o trade-off aceito do src-layout e deve ficar explícito
+  no README.
 - Execução: `sei-insights <opções>` (após `pip install -e .`) ou
   `python -m sei_insights <opções>`.
 - Testes: `pip install -e .` e depois `python -m unittest discover -s tests -v`,
@@ -150,16 +161,38 @@ where = ["src"]
 - O README é atualizado para documentar o pré-requisito de instalação e as
   ordenações acima.
 
+## 6.1 Ambiente canônico
+
+O repositório não tem `.venv` e o Python global (3.14.7) não tem `setuptools`
+nem todas as dependências (`openpyxl` e `pypdf` estão ausentes hoje — a suíte
+atual roda com 3 erros). Para que a verificação (§7) compare "antes" e "após"
+com o único delta sendo a movimentação de arquivos, usamos um ambiente único:
+
+```bash
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt   # provisiona deps sem depender do layout
+```
+
+Todas as execuções de teste usam `.venv\Scripts\python`. O `pip install -e .`
+(após o move) **não altera** o conjunto de dependências — já instaladas — apenas
+registra o pacote editável no ambiente. Primeiro passo do plano de implementação:
+verificar que `pip install -e .` funciona nesta máquina (Windows/Python 3.14),
+antes de qualquer movimentação.
+
 ## 7. Verificação
 
-1. Antes da movimentação: rodar a suíte e registrar o resultado (base),
-   anotando os skips (`test_captcha_solver` pula se `ddddocr` ausente).
-2. Após: `pip install -e .` e rodar a mesma suíte — resultado idêntico
-   (mesmo conjunto de pass/skip/fail).
-3. `git status` limpo: `*.egg-info/`, `build/`, `dist/` ignorados pelo
-   `.gitignore`; nada de `.worktrees/` ou deleções de handoff no commit
-   (staging direcionado, §2).
+1. **Antes** da movimentação: com o venv provisionado (§6.1), rodar a suíte e
+   registrar pass/skip/fail (base). O conjunto de skips reflete apenas
+   dependências opcionais (`test_captcha_solver` pula se `ddddocr` ausente).
+2. **Após**: ativar o venv, `pip install -e .`, rodar a mesma suíte da raiz —
+   resultado idêntico à base (mesmo pass/skip/fail).
+3. `git status` limpo: `*.egg-info/`, `build/`, `dist/` ignorados; nenhuma
+   deleção de handoff nem `.worktrees/` no commit (staging por `git mv` +
+   `git add`, §2); **módulos antigos da raiz removidos** (sem duplicação raiz + `src/`).
 4. Diff de lógica: corpos das funções são cópias exatas; diferenças apenas em
    imports e no bloco `__main__`.
-5. Smoke test: `python -m sei_insights --help` a partir da raiz.
-6. README: tabela "Estrutura do projeto" e seção "Testes" atualizadas.
+5. Smoke test na raiz com venv: `python -m sei_insights --help` e
+   `sei-insights --help`.
+6. README: tabela "Estrutura do projeto", seção "Testes" e **todos** os blocos
+   de execução com `python main.py` e as seções `pip install -r requirements.txt`
+   substituídos pelos novos comandos.
