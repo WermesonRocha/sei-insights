@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from utils import (
+from sei_insights.utils import (
     calculate_sha256,
     extension_from_content_type,
     looks_like_html,

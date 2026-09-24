@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from store import MirrorStore, ProcessRow, despacho_hash
+from sei_insights.store import MirrorStore, ProcessRow, despacho_hash
 
 
 def row(numero: str, situacao: str = "X", hash_: str = "h") -> ProcessRow:

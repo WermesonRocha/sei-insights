@@ -1,6 +1,6 @@
 import unittest
 
-from sei_client import SeiClient, extract_process  # extract_process is a module function below
+from sei_insights.sei_client import SeiClient, extract_process  # extract_process is a module function below
 
 
 class FakeResponse:

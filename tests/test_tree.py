@@ -1,6 +1,6 @@
 import unittest
 
-from tree import correlate_urls, parse_tree, select_last_despacho
+from sei_insights.tree import correlate_urls, parse_tree, select_last_despacho
 
 HTML = """
 <div class="infraArvore">

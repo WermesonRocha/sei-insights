@@ -8,9 +8,9 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
-from discovery import expected_total, pagination_params, parse_response
-from rate_limit import RateLimiter
-from utils import normalize_process_number, safe_filename, calculate_sha256, extension_from_content_type, looks_like_html, unique_path
+from sei_insights.discovery import expected_total, pagination_params, parse_response
+from sei_insights.rate_limit import RateLimiter
+from sei_insights.utils import normalize_process_number, safe_filename, calculate_sha256, extension_from_content_type, looks_like_html, unique_path
 
 logger = logging.getLogger("sei-insights")
 

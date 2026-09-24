@@ -4,8 +4,8 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from report import build_resumo, write_spreadsheet
-from store import ProcessRow
+from sei_insights.report import build_resumo, write_spreadsheet
+from sei_insights.store import ProcessRow
 
 
 def row(numero: str, situacao: str = "Na CTI", status: str = "concluído") -> ProcessRow:

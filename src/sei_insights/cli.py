@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
-from report import build_resumo, write_spreadsheet
-from sei_client import ProcessResult, SeiClient
-from store import MirrorStore, ProcessRow
+from sei_insights.report import build_resumo, write_spreadsheet
+from sei_insights.sei_client import ProcessResult, SeiClient
+from sei_insights.store import MirrorStore, ProcessRow
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)-8s | %(message)s",
@@ -113,14 +112,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         previous = store.load_snapshot()
         now = now_str()
         # Imports de todas as fases (browser, árvore, texto, regras, relatório).
-        from discovery import expected_total, pagination_params, parse_response  # noqa: F401
-        from rate_limit import RateLimiter
-        from rules import RulesEngine
-        from sei_client import (  # noqa: F401
+        from sei_insights.discovery import expected_total, pagination_params, parse_response  # noqa: F401
+        from sei_insights.rate_limit import RateLimiter
+        from sei_insights.rules import RulesEngine
+        from sei_insights.sei_client import (  # noqa: F401
             ProcessResult, SeiClient)  # fluxo real usa estes
-        from text_ing import extract_text_from_pdf
-        from tree import correlate_urls, parse_tree, select_last_despacho
-        from utils import normalize_process_number  # noqa: F401
+        from sei_insights.text_ing import extract_text_from_pdf
+        from sei_insights.tree import correlate_urls, parse_tree, select_last_despacho
+        from sei_insights.utils import normalize_process_number  # noqa: F401
 
         rules = RulesEngine.from_file(Path("regras.json"))
 
@@ -137,7 +136,3 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
     finally:
         store.close()
-
-
-if __name__ == "__main__":
-    sys.exit(main())

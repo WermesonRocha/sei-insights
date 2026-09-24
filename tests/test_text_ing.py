@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from text_ing import extract_text_from_pdf
+from sei_insights.text_ing import extract_text_from_pdf
 
 
 # PDF mínimo de uma página codificado em base64 contendo "Diante do exposto" com recursos de fonte adequados

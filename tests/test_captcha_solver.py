@@ -9,7 +9,7 @@ try:
 except ImportError:
     ddddocr = None
 
-from captcha_solver import CaptchaSolver
+from sei_insights.captcha_solver import CaptchaSolver
 
 
 class FakeLocator:
@@ -64,7 +64,7 @@ class CaptchaSolverTest(unittest.TestCase):
         # CAPTCHA válido: 6 caracteres alfanuméricos
         fake_page = FakePage(["data:image/png;base64,valid_captcha"])
         
-        with patch('captcha_solver.CaptchaSolver.solve_from_base64', return_value="ABC123"):
+        with patch('sei_insights.captcha_solver.CaptchaSolver.solve_from_base64', return_value="ABC123"):
             solver = CaptchaSolver(max_retries=3)
             result = solver.solve_captcha_in_page(fake_page)
         
@@ -79,7 +79,7 @@ class CaptchaSolverTest(unittest.TestCase):
             "data:image/png;base64,captcha2"
         ])
         
-        with patch('captcha_solver.CaptchaSolver.solve_from_base64', side_effect=["ABC", "XYZ789"]):
+        with patch('sei_insights.captcha_solver.CaptchaSolver.solve_from_base64', side_effect=["ABC", "XYZ789"]):
             solver = CaptchaSolver(max_retries=3)
             result = solver.solve_captcha_in_page(fake_page)
         
@@ -90,7 +90,7 @@ class CaptchaSolverTest(unittest.TestCase):
     def test_solve_captcha_in_page_falha_apos_max_retries(self):
         fake_page = FakePage(["data:image/png;base64,captcha"] * 4)
         
-        with patch('captcha_solver.CaptchaSolver.solve_from_base64', return_value="INVALID"):
+        with patch('sei_insights.captcha_solver.CaptchaSolver.solve_from_base64', return_value="INVALID"):
             solver = CaptchaSolver(max_retries=3)
             with self.assertRaises(RuntimeError) as ctx:
                 solver.solve_captcha_in_page(fake_page)
@@ -105,7 +105,7 @@ class CaptchaSolverTest(unittest.TestCase):
             "data:image/png;base64,captcha3"
         ])
         
-        with patch('captcha_solver.CaptchaSolver.solve_from_base64', side_effect=["AB", "CD", "EF1234"]):
+        with patch('sei_insights.captcha_solver.CaptchaSolver.solve_from_base64', side_effect=["AB", "CD", "EF1234"]):
             solver = CaptchaSolver(max_retries=3)
             result = solver.solve_captcha_in_page(fake_page)
         

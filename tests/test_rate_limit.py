@@ -2,7 +2,7 @@ import time
 import unittest
 from unittest import mock
 
-from rate_limit import RateLimiter
+from sei_insights.rate_limit import RateLimiter
 
 
 class RateLimiterTest(unittest.TestCase):
@@ -15,9 +15,9 @@ class RateLimiterTest(unittest.TestCase):
             RateLimiter(3, 2)
 
     def test_wait_dorme_entre_min_e_max(self):
-        with mock.patch("rate_limit.time.sleep") as sleep, \
-                mock.patch("rate_limit.random.uniform", return_value=2.0), \
-                mock.patch("rate_limit.time.monotonic", side_effect=[0.0, 0.5, 2.0, 2.0]):
+        with mock.patch("sei_insights.rate_limit.time.sleep") as sleep, \
+                mock.patch("sei_insights.rate_limit.random.uniform", return_value=2.0), \
+                mock.patch("sei_insights.rate_limit.time.monotonic", side_effect=[0.0, 0.5, 2.0, 2.0]):
             rl = RateLimiter(1, 3)
             rl.wait()
             # Primeira chamada: now=0.0, elapsed=0.0, remaining=2.0, sleep(2.0), _last_request=0.5
@@ -29,7 +29,7 @@ class RateLimiterTest(unittest.TestCase):
             self.assertAlmostEqual(sleep.call_args_list[1][0][0], 0.5)
 
     def test_wait_seconds_obedece_retry_after(self):
-        with mock.patch("rate_limit.time.sleep") as sleep:
+        with mock.patch("sei_insights.rate_limit.time.sleep") as sleep:
             rl = RateLimiter(1, 3)
             rl.wait_seconds(4.2)
             sleep.assert_called_once_with(4.2)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
-from store import FIELDS, ProcessRow
+from sei_insights.store import FIELDS, ProcessRow
 
 
 def build_resumo(rows: list[ProcessRow], novos: list[ProcessRow]) -> dict:
