@@ -59,14 +59,14 @@ def build_rows(
     for p in found:
         prev = previous.get(p.number)
         row = None
-        # Skip analyze if cached, not forced, AND hash matches (same last despacho)
+        # Pula analyze se houver cache, não forçado, E hash bate (mesmo último despacho)
         if prev is not None and not force:
-            # analyze() should return a row with updated hash_ultimo_despacho
-            # We call analyze to get the current hash, but if it matches prev, we keep cached data
+            # analyze() deve retornar linha com hash_ultimo_despacho atualizado
+            # Chamamos analyze para obter hash atual, mas se bate com prev, mantemos cache
             try:
                 current_row = analyze(p, prev, force, now)
                 if current_row.hash_ultimo_despacho == prev.hash_ultimo_despacho:
-                    # Hash unchanged: use cached data, preserve original analysis date
+                    # Hash inalterado: usa dados do cache, preserva data de análise original
                     row = ProcessRow(
                         numero=p.number, titulo=p.title, data_execucao=now,
                         data_analise=prev.data_analise, data_ultimo_despacho=prev.data_ultimo_despacho,
@@ -75,7 +75,7 @@ def build_rows(
                         status_coleta="concluído (cache)", hash_ultimo_despacho=prev.hash_ultimo_despacho,
                     )
                 else:
-                    # Hash changed (new despacho): use fresh analysis
+                    # Hash mudou (novo despacho): usa análise fresca
                     row = current_row
             except Exception as exc:
                 logger.warning("Erro ao analisar %s: %s", p.number, exc)
@@ -117,7 +117,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         from rate_limit import RateLimiter
         from rules import RulesEngine
         from sei_client import (  # noqa: F401
-            ProcessResult, SeiClient)  # real flow uses these
+            ProcessResult, SeiClient)  # fluxo real usa estes
         from text_ing import extract_text_from_pdf
         from tree import correlate_urls, parse_tree, select_last_despacho
         from utils import normalize_process_number  # noqa: F401

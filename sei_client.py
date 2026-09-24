@@ -37,9 +37,9 @@ class PublicDocument:
 
 
 def extract_process(html: str, requested_number: str) -> Optional[ProcessResult]:
-    """Extract process from HTML matching the requested number."""
+    """Extrai processo do HTML correspondente ao número solicitado."""
     soup = BeautifulSoup(html, "html.parser")
-    # Try to find by data-prot attribute
+    # Tenta encontrar pelo atributo data-prot
     for row in soup.select("[data-prot]"):
         prot = row.get("data-prot", "").strip()
         if normalize_process_number(prot) == normalize_process_number(requested_number):
@@ -61,7 +61,7 @@ class SeiClient:
 
     @staticmethod
     def is_search_response(response) -> bool:
-        """Check if response is the search AJAX response."""
+        """Verifica se a resposta é a resposta AJAX de pesquisa."""
         try:
             if response.request.method != "POST":
                 return False
@@ -75,69 +75,69 @@ class SeiClient:
             return False
 
     def save_debug(self, name: str) -> None:
-        """Save debug screenshot and HTML."""
+        """Salva screenshot e HTML para debug."""
         pass
 
     def open_search_page(self) -> None:
-        """Open the search page."""
+        """Abre a página de pesquisa."""
         pass
 
     def process_input(self):
-        """Get process input element."""
+        """Obtém elemento de input do processo."""
         pass
 
     def captcha_input(self):
-        """Get captcha input element."""
+        """Obtém elemento de input do CAPTCHA."""
         pass
 
     def captcha_is_present(self) -> bool:
-        """Check if captcha is present."""
+        """Verifica se CAPTCHA está presente."""
         return False
 
     def captcha_has_value(self) -> bool:
-        """Check if captcha has value."""
+        """Verifica se CAPTCHA tem valor."""
         return False
 
     def wait_for_manual_captcha(self) -> None:
-        """Wait for manual captcha."""
+        """Aguarda CAPTCHA manual."""
         pass
 
     def solve_search_captcha(self) -> None:
-        """Solve search captcha."""
+        """Resolve CAPTCHA da pesquisa."""
         pass
 
     def find_search_submit(self):
-        """Find search submit button."""
+        """Encontra botão de submit da pesquisa."""
         pass
 
     def submit_search(self) -> None:
-        """Submit search."""
+        """Submete a pesquisa."""
         pass
 
     def _set_search_criteria(self, orgao: str, unidade: str,
                              inicio: str, fim: str) -> None:
-        """Set search criteria."""
+        """Define critérios de pesquisa."""
         pass
 
     def _fetch_page(self, inicio: int, page_size: int) -> dict:
-        """Fetch a page of results."""
+        """Busca uma página de resultados."""
         return {"itens": 0, "html": ""}
 
     def _add_result(self, results: dict, number: str, data: dict) -> None:
-        """Add result to results dict."""
+        """Adiciona resultado ao dicionário de resultados."""
         pass
 
     def _build_process_result(self, number: str, link: str) -> ProcessResult:
-        """Build process result."""
+        """Constrói resultado do processo."""
         return ProcessResult(number=number, url=link, title="")
 
     def _find_process_link(self, number: str) -> str:
-        """Find process link."""
+        """Encontra link do processo."""
         return ""
 
     def search_processes(self, orgao: str, unidade: str,
                          inicio: str, fim: str, page_size: int = 50) -> list[ProcessResult]:
-        """Search for processes."""
+        """Pesquisa processos."""
         self.open_search_page()
         self._set_search_criteria(orgao, unidade, inicio, fim)
         results: dict[str, ProcessResult] = {}
@@ -146,26 +146,26 @@ class SeiClient:
         def is_search_response(response) -> bool:
             return SeiClient.is_search_response(response)
 
-        # This would use page.expect_response in real implementation
-        # For now return empty
+        # Isto usaria page.expect_response na implementação real
+        # Por enquanto retorna vazio
         return list(results.values())
 
     def open_process(self, process: ProcessResult) -> str:
-        """Open process page."""
+        """Abre página do processo."""
         return ""
 
     def extract_documents(self, process_html: str, process_url: str) -> list[PublicDocument]:
-        """Extract documents from process page."""
+        """Extrai documentos da página do processo."""
         return []
 
     def download_document(self, process_number: str, document: PublicDocument):
-        """Download document."""
+        """Baixa documento."""
         return None, None, None
 
     def ensure_orgaos_selected(self) -> None:
-        """Ensure orgãos are selected."""
+        """Garante que órgãos estão selecionados."""
         pass
 
     def ensure_process_checkbox(self) -> None:
-        """Ensure process checkbox is checked."""
+        """Garante que checkbox de processo está marcado."""
         pass

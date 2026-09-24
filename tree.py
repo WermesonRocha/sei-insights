@@ -74,7 +74,7 @@ def correlate_urls(nodes: list[DocNode], links: list[tuple[str, str]]) -> list[D
 
 
 def _corresponds_to_numbered(label: str) -> bool:
-    """Return True if label does NOT contain a document number (for fallback links)."""
+    """Retorna True se o rótulo NÃO contém número de documento (para links fallback)."""
     return NUM_RE.search(label) is None
 
 

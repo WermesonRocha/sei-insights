@@ -8,9 +8,9 @@ logger = logging.getLogger("sei-insights")
 class RateLimiter:
     def __init__(self, min_delay: float, max_delay: float):
         if min_delay < 0:
-            raise ValueError("min_delay must be non-negative")
+            raise ValueError("min_delay deve ser não negativo")
         if max_delay < min_delay:
-            raise ValueError("max_delay must be >= min_delay")
+            raise ValueError("max_delay deve ser >= min_delay")
         self.min_delay = min_delay
         self.max_delay = max_delay
         self._last_request = 0.0

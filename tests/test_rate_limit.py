@@ -20,11 +20,11 @@ class RateLimiterTest(unittest.TestCase):
                 mock.patch("rate_limit.time.monotonic", side_effect=[0.0, 0.5, 2.0, 2.0]):
             rl = RateLimiter(1, 3)
             rl.wait()
-            # First call: now=0.0, elapsed=0.0, remaining=2.0, sleep(2.0), _last_request=0.5
+            # Primeira chamada: now=0.0, elapsed=0.0, remaining=2.0, sleep(2.0), _last_request=0.5
             sleep.assert_called_once()
             self.assertAlmostEqual(sleep.call_args[0][0], 2.0)
             rl.wait()
-            # Second call: now=2.0, elapsed=2.0-0.5=1.5, remaining=2.0-1.5=0.5, sleep(0.5)
+            # Segunda chamada: now=2.0, elapsed=2.0-0.5=1.5, remaining=2.0-1.5=0.5, sleep(0.5)
             self.assertEqual(sleep.call_count, 2)
             self.assertAlmostEqual(sleep.call_args_list[1][0][0], 0.5)
 
