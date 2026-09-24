@@ -7,6 +7,41 @@
   },
   "regras": [
     {
+      "pattern": "(?:retorno a\\s+(?:esta|essa|a)|aguardando retorno\\s+(?:da|de)|retorno para)\\s*(MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI[\\- ]DTI|MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI(?![\\- ]DTI))\\b",
+      "situacao": "Aguardando retorno de \\1",
+      "destino": "\\1",
+      "acao_esperada": "retorno",
+      "pendencia_curta": "Aguardando retorno da unidade \\1"
+    },
+    {
+      "pattern": "(?:para|com vistas a)\\s+(ciência|análise|manifestação|parecer|providências)\\s+(?:da|do|de)\\s*(MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI[\\- ]DTI|MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI(?![\\- ]DTI))\\b",
+      "situacao": "Aguardando \\1 de \\2",
+      "destino": "\\2",
+      "acao_esperada": "\\1",
+      "pendencia_curta": "Aguardando \\1 da unidade \\2"
+    },
+    {
+      "pattern": "(?:adote[\\- ]?se|adotem[\\- ]?se|providencie[\\- ]?se|adotar providências|tomar providências)\\s+(?:as|as devidas|as necessárias)?\\s*(?:ciência|análise|manifestação|parecer|providências)?\\s*(?:por|pela|pelo)?\\s*(MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI[\\- ]DTI|MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI(?![\\- ]DTI))\\b",
+      "situacao": "Aguardando providências de \\1",
+      "destino": "\\1",
+      "acao_esperada": "providências",
+      "pendencia_curta": "Aguardando providências da unidade \\1"
+    },
+    {
+      "pattern": "(?:d[êe][\\- ]?se\\s+ciência|cientifique[\\- ]?se|para ciência\\s+(?:da|do|de))\\s+(?:à|a|ao)?\\s*(MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI[\\- ]DTI|MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI(?![\\- ]DTI))\\b",
+      "situacao": "Para ciência de \\1",
+      "destino": "\\1",
+      "acao_esperada": "ciência",
+      "pendencia_curta": "Aguardando ciência da unidade \\1"
+    },
+    {
+      "pattern": "(?:encaminha[\\- ]?se|remete[\\- ]?se|encaminham[\\- ]?se|remetem[\\- ]?se)\\s+(?:os autos[\\s\\S]*?\\b)?(?:à|a|para)\\s+(?:da|do|de)?\\s*(MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI[\\- ]DTI|MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI(?![\\- ]DTI))\\b",
+      "situacao": "Encaminhado a \\1 (nossa unidade)",
+      "destino": "\\1",
+      "acao_esperada": "análise e providências",
+      "pendencia_curta": "Processo encaminhado para nossa unidade (\\1) - ação necessária"
+    },
+    {
       "pattern": "(?:para|aguardando|pendente de)\\s+assinatura",
       "situacao": "Pendente de assinatura",
       "destino": "",
@@ -22,7 +57,7 @@
     },
     {
       "pattern": "(?:encaminha[\\- ]?se|remete[\\- ]?se|encaminham[\\- ]?se|remetem[\\- ]?se)\\s+(?:os autos[\\s\\S]*?\\b)?(?:à|a|para)\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s+para|\\s*$)",
-      "situacao": "Encaminhado a \\1",
+      "situacao": "Encaminhado a \u0001",
       "destino": "\\1",
       "acao_esperada": "análise e providências",
       "pendencia_curta": "Processo encaminhado para análise/providências"
