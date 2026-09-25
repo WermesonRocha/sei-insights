@@ -1,5 +1,7 @@
 # Reorganização em src-layout — Plano de Implementação
 
+> **Status: ✅ IMPLEMENTADO** — verificado em 24/09/2026. Todos os passos concluídos (commits `ba8f010`, `ca99e8b`, `9bba651`, `589c7cf`); suíte verde (58 testes OK); estrutura `src/sei_insights/` confirmada.
+
 > **Para workers agentic:** SUB-SKILL OBRIGATÓRIA: use superpowers:subagent-driven-development (recomendado) ou superpowers:executing-plans para implementar este plano tarefa-a-tarefa. Passos usam caixa de seleção (`- [ ]`) para rastreio.
 
 **Goal:** Organizar todos os módulos Python do `sei-insights` em um pacote `sei_insights` com src-layout, sem nenhuma mudança de comportamento, criando `pyproject.toml`, `__main__.py` e atualizando README/.gitignore.
@@ -45,7 +47,7 @@ Classes de entrada/modas de falha que a spec implica e que nenhum teste unitári
 - Produces: o comando canônico de execução de testes usado por todas as tarefas seguintes:
   `& .venv\Scripts\python.exe -m unittest discover -s tests -v` (da raiz do repo) e a **tally da baseline** (contagem pass/skip/fail).
 
-- [ ] **Passo 1: criar o venv**
+- [x] **Passo 1: criar o venv**
 
 ```powershell
 python -m venv .venv
@@ -53,7 +55,7 @@ python -m venv .venv
 
 Expected: pasta `.venv/` criada.
 
-- [ ] **Passo 2: provisionar as dependências no venv (fonte única: requirements.txt)**
+- [x] **Passo 2: provisionar as dependências no venv (fonte única: requirements.txt)**
 
 ```powershell
 & .venv\Scripts\python.exe -m pip install -r requirements.txt
@@ -61,7 +63,7 @@ Expected: pasta `.venv/` criada.
 
 Expected: instala `playwright`, `beautifulsoup4`, `ddddocr` (+transitivas), `opencv-python-headless`, `pypdf`, `openpyxl`. **Se falhar** (ex.: rodas para Python 3.14 no Windows), PARE e reporte o bloqueio — não continue o plano sem resolver.
 
-- [ ] **Passo 3: rodar a baseline e registrar a tally**
+- [x] **Passo 3: rodar a baseline e registrar a tally**
 
 ```powershell
 & .venv\Scripts\python.exe -m unittest discover -s tests -v
@@ -88,7 +90,7 @@ Se a baseline tiver qualquer erro/falha, PARE e diagnostique antes de prosseguir
 - Consumes: venv da Tarefa 1.
 - Produces: pacote `sei_insights` importável no venv (via editable install); comando de verificação `& .venv\Scripts\python.exe -c "import sei_insights; print(sei_insights.__version__)"` → deve imprimir `0.1.0`. Os módulos ainda estão na raiz (migração é a Tarefa 3).
 
-- [ ] **Passo 1: criar `src/sei_insights/__init__.py`**
+- [x] **Passo 1: criar `src/sei_insights/__init__.py`**
 
 Conteúdo exato:
 
@@ -96,7 +98,7 @@ Conteúdo exato:
 __version__ = "0.1.0"
 ```
 
-- [ ] **Passo 2: criar `pyproject.toml` na raiz**
+- [x] **Passo 2: criar `pyproject.toml` na raiz**
 
 Conteúdo exato:
 
@@ -124,7 +126,7 @@ where = ["src"]
 
 Nota: `sei_insights.cli` ainda não existe (será criado na Tarefa 3) — isso não impede o install editável.
 
-- [ ] **Passo 3: atualizar `.gitignore`** (acrescentar ao final)
+- [x] **Passo 3: atualizar `.gitignore`** (acrescentar ao final)
 
 Acrescente estas 3 linhas ao arquivo atual:
 
@@ -134,7 +136,7 @@ build/
 dist/
 ```
 
-- [ ] **Passo 4: instalar o pacote editável no venv**
+- [x] **Passo 4: instalar o pacote editável no venv**
 
 ```powershell
 & .venv\Scripts\python.exe -m pip install -e .
@@ -142,7 +144,7 @@ dist/
 
 Expected: sucesso (build isolado com setuptools>=68; deps já instaladas são no-op). Isto cria `src/sei_insights.egg-info/`, ignorado pelo `.gitignore` (Passo 3).
 
-- [ ] **Passo 5: verificar que o pacote é importável**
+- [x] **Passo 5: verificar que o pacote é importável**
 
 ```powershell
 & .venv\Scripts\python.exe -c "import sei_insights; print(sei_insights.__version__)"
@@ -150,7 +152,7 @@ Expected: sucesso (build isolado com setuptools>=68; deps já instaladas são no
 
 Expected: imprime `0.1.0`. (Não rode `sei-insights --help` aqui — `cli.py` ainda não existe.)
 
-- [ ] **Passo 6: confirmar que a suíte continua idêntica à baseline**
+- [x] **Passo 6: confirmar que a suíte continua idêntica à baseline**
 
 ```powershell
 & .venv\Scripts\python.exe -m unittest discover -s tests -v
@@ -158,7 +160,7 @@ Expected: imprime `0.1.0`. (Não rode `sei-insights --help` aqui — `cli.py` ai
 
 Expected: mesma tally da Tarefa 1 (nada de comportamento mudou; testes ainda importam módulos da raiz).
 
-- [ ] **Passo 7: commit**
+- [x] **Passo 7: commit**
 
 ```powershell
 git add pyproject.toml src/sei_insights/__init__.py .gitignore
@@ -181,7 +183,7 @@ git commit -m "chore: esqueleto do pacote sei_insights e pyproject (src-layout)"
 - Consumes: pacote editável da Tarefa 2; suíte da baseline da Tarefa 1.
 - Produces: layout de destino do §3 da spec; entry points `python -m sei_insights` e `sei-insights`; suíte com tally **idêntica** à baseline.
 
-- [ ] **Passo 1: mover os 11 módulos com `git mv`**
+- [x] **Passo 1: mover os 11 módulos com `git mv`**
 
 ```powershell
 git mv sei_client.py discovery.py tree.py text_ing.py rules.py store.py report.py captcha_solver.py rate_limit.py utils.py src/sei_insights/
@@ -190,7 +192,7 @@ git mv main.py src/sei_insights/cli.py
 
 Expected: `git status` mostra 11 renames do tipo `rename ... -> src/sei_insights/...`, sem deleções órfãs na raiz.
 
-- [ ] **Passo 2: criar `src/sei_insights/__main__.py`**
+- [x] **Passo 2: criar `src/sei_insights/__main__.py`**
 
 Conteúdo exato (bloco que antes vivia no final de `main.py`):
 
@@ -204,7 +206,7 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Passo 3: reescrever imports nos 10 módulos que não são o cli**
+- [x] **Passo 3: reescrever imports nos 10 módulos que não são o cli**
 
 Conteúdo dos módulos movidos, exceto `cli.py` — substituições EXATAS de linha:
 
@@ -226,7 +228,7 @@ Select-String -Path src\sei_insights\*.py -Pattern '^\s*from (discovery|sei_clie
 
 Expected: nenhum resultado.
 
-- [ ] **Passo 4: reescrever imports no `src/sei_insights/cli.py` (antigo main.py)**
+- [x] **Passo 4: reescrever imports no `src/sei_insights/cli.py` (antigo main.py)**
 
 - Bloco de imports no topo:
   - `from report import build_resumo, write_spreadsheet` → `from sei_insights.report import build_resumo, write_spreadsheet`
@@ -257,13 +259,13 @@ Select-String -Path src\sei_insights\cli.py -Pattern '^\s*from (discovery|sei_cl
 
 Expected: nenhum resultado; e `Select-String -Path src\sei_insights\cli.py -Pattern '__main__'` → nenhum resultado.
 
-- [ ] **Passo 5: renomear o arquivo de teste**
+- [x] **Passo 5: renomear o arquivo de teste**
 
 ```powershell
 git mv tests/test_main.py tests/test_cli.py
 ```
 
-- [ ] **Passo 6: reescrever imports nos testes** (substituições EXATAS por arquivo)
+- [x] **Passo 6: reescrever imports nos testes** (substituições EXATAS por arquivo)
 
 - `tests/test_cli.py` (antes `test_main.py`):
   - `from main import build_rows, now_str, parse_arguments` → `from sei_insights.cli import build_rows, now_str, parse_arguments`
@@ -304,7 +306,7 @@ Select-String -Path tests\test_*.py -Pattern '^\s*from (main|discovery|sei_clien
 
 Expected: nenhum resultado.
 
-- [ ] **Passo 7: rodar a suíte completa e comparar com a baseline**
+- [x] **Passo 7: rodar a suíte completa e comparar com a baseline**
 
 ```powershell
 & .venv\Scripts\python.exe -m unittest discover -s tests -v
@@ -312,7 +314,7 @@ Expected: nenhum resultado.
 
 Expected: tally **idêntica** à registrada na Tarefa 1 (mesmo `Ran N tests`, mesmo fluxo, `OK` ou `skipped=N` correspondente). Se qualquer teste falhar/errar, use systematic-debugging ANTES de continuar — não "conserta" no improviso.
 
-- [ ] **Passo 8: verificar que não há módulo órfão na raiz**
+- [x] **Passo 8: verificar que não há módulo órfão na raiz**
 
 ```powershell
 Get-ChildItem -Path . -Filter *.py | Select-Object Name
@@ -321,7 +323,7 @@ Get-ChildItem -Path . -Filter *.py | Select-Object Name
 
 Expected: lista vazia na raiz (nenhum `.py`); import dos módulos do pacote imprime `ok`.
 
-- [ ] **Passo 9: limpar `__pycache__` órfão da raiz (se existir)**
+- [x] **Passo 9: limpar `__pycache__` órfão da raiz (se existir)**
 
 ```powershell
 Remove-Item -Recurse -Force __pycache__ -ErrorAction SilentlyContinue
@@ -329,7 +331,7 @@ Remove-Item -Recurse -Force __pycache__ -ErrorAction SilentlyContinue
 
 Expected: sem erro (pode não existir).
 
-- [ ] **Passo 10: commit**
+- [x] **Passo 10: commit**
 
 ```powershell
 git add src/sei_insights/ tests/
@@ -351,7 +353,7 @@ git commit -m "refactor: move módulos para o pacote sei_insights (src-layout)"
 - Consumes: layout final (Tarefa 3), comandos que passam a existir (`python -m sei_insights`, `sei-insights`, pré-requisito `pip install -e .`).
 - Produces: README consistente com o novo layout; zero menções a `python main.py`.
 
-- [ ] **Passo 1: tabela "Estrutura do projeto" (linhas ~152-170)**
+- [x] **Passo 1: tabela "Estrutura do projeto" (linhas ~152-170)**
 
 Substitua a tabela atual pela seguinte (alinhada ao src-layout):
 
@@ -376,7 +378,7 @@ Substitua a tabela atual pela seguinte (alinhada ao src-layout):
 | `.state/`                     | Banco SQLite espelho + diagnósticos (gerado).                   |
 ```
 
-- [ ] **Passo 2: seções de instalação (Windows/Linux/macOS, linhas ~222-316)**
+- [x] **Passo 2: seções de instalação (Windows/Linux/macOS, linhas ~222-316)**
 
 Logo **após** cada bloco `pip install -r requirements.txt` (linhas 225, 269, 308), acrescente o passo "instale o pacote em modo editável (habilita os comandos `sei-insights` e `python -m sei_insights`)":
 
@@ -387,7 +389,7 @@ pip install -e .
 Nos três blocos de código (powershell/bash), adicione a linha correspondente em sintaxe compatível com o shell de cada aba:
 - `pip install -e .` (funciona nos três shells).
 
-- [ ] **Passo 3: seção "Executando o programa" (linhas ~335-341)**
+- [x] **Passo 3: seção "Executando o programa" (linhas ~335-341)**
 
 Substitua o bloco:
 
@@ -403,7 +405,7 @@ python -m sei_insights
 
 E na frase introdutória ("Na pasta do projeto, com o ambiente virtual ativado:"), acrescente: "(o comando `sei-insights` é equivalente e também está disponível após `pip install -e .`; sem o install, `python -m sei_insights` falha com `ModuleNotFoundError`)."
 
-- [ ] **Passo 4: bloco "Exemplos de uso" (linhas ~364-382)**
+- [x] **Passo 4: bloco "Exemplos de uso" (linhas ~364-382)**
 
 Substitua cada ocorrência de `python main.py` por `python -m sei_insights`, mantendo os argumentos idênticos. As 6 linhas viram:
 
@@ -427,12 +429,12 @@ python -m sei_insights --min-delay 3 --max-delay 7 --force
 python -m sei_insights --saida relatorios/setembro.xlsx
 ```
 
-- [ ] **Passo 5: seção "Como limpar os dados" (linhas ~574-605)**
+- [x] **Passo 5: seção "Como limpar os dados" (linhas ~574-605)**
 
 - Linha 575: `python main.py --force` → `python -m sei_insights --force`
 - Linha 604 (texto): "execute `python main.py` novamente" → "execute `python -m sei_insights` novamente"
 
-- [ ] **Passo 6: seção "Testes" (linhas ~681-694)**
+- [x] **Passo 6: seção "Testes" (linhas ~681-694)**
 
 Substitua a seção inteira por:
 
@@ -454,7 +456,7 @@ python -m unittest tests.test_store -v
 ```
 ```
 
-- [ ] **Passo 7: verificar que não sobraram referências a `python main.py`**
+- [x] **Passo 7: verificar que não sobraram referências a `python main.py`**
 
 ```powershell
 Select-String -Path README.md -Pattern 'python main\.py'
@@ -462,7 +464,7 @@ Select-String -Path README.md -Pattern 'python main\.py'
 
 Expected: nenhum resultado.
 
-- [ ] **Passo 8: commit**
+- [x] **Passo 8: commit**
 
 ```powershell
 git add README.md
@@ -480,7 +482,7 @@ git commit -m "docs: atualiza README para src-layout (comandos python -m sei_ins
 **Interfaces:**
 - Consumes: repo reorganizado (Tarefas 2-4), baseline (Tarefa 1).
 
-- [ ] **Passo 1: suíte final idêntica à baseline**
+- [x] **Passo 1: suíte final idêntica à baseline**
 
 ```powershell
 & .venv\Scripts\python.exe -m unittest discover -s tests -v
@@ -488,7 +490,7 @@ git commit -m "docs: atualiza README para src-layout (comandos python -m sei_ins
 
 Expected: mesma tally da Tarefa 1.
 
-- [ ] **Passo 2: smoke test dos entry points (venv, da raiz)**
+- [x] **Passo 2: smoke test dos entry points (venv, da raiz)**
 
 ```powershell
 & .venv\Scripts\python.exe -m sei_insights --help
@@ -497,7 +499,7 @@ Expected: mesma tally da Tarefa 1.
 
 Expected: ambos imprimem o help do argparse (com as mesmas opções de `--orgao` a `--saida`). Observação cosmética aceita: `usage:` pode exibir `__main__.py`/`sei-insights` como prog.
 
-- [ ] **Passo 3: `git status` limpo e módulos da raiz removidos**
+- [x] **Passo 3: `git status` limpo e módulos da raiz removidos**
 
 ```powershell
 git status --short
@@ -509,7 +511,7 @@ Expected:
 - nenhum `.py` na raiz;
 - `src/sei_insights/` com os 13 arquivos `__init__.py`, `__main__.py`, `cli.py`, `sei_client.py`, `discovery.py`, `tree.py`, `text_ing.py`, `rules.py`, `store.py`, `report.py`, `captcha_solver.py`, `rate_limit.py`, `utils.py`.
 
-- [ ] **Passo 4: diff de lógica — corpos intactos**
+- [x] **Passo 4: diff de lógica — corpos intactos**
 
 ```powershell
 git diff --find-renames -M --name-status 4879249..HEAD
@@ -518,7 +520,7 @@ git diff --find-renames -M 4879249..HEAD -- 'src/sei_insights/cli.py'
 
 Expected: o primeiro comando lista os 11 módulos como renames — **`R100`** para `sei_client.py`, `discovery.py`, `tree.py`, `text_ing.py`, `rules.py`, `store.py`, `report.py`, `captcha_solver.py`, `rate_limit.py`, `utils.py` (conteúdo idêntico: 100% similarity) e **`R`** com modificação apenas para `cli.py` (antigo `main.py`). O segundo comando mostra em `cli.py` unicamente: mudança dos imports (prefixo `sei_insights.`) e remoção do bloco `if __name__ == "__main__"` + `import sys`. Nenhum outro diff de conteúdo nos módulos.
 
-- [ ] **Passo 5: resumo final**
+- [x] **Passo 5: resumo final**
 
 Apresente: renames efetuados, tally da suíte = baseline, smoke ok, `git status` limpo. Não faça merge/push (fora do escopo).
 

@@ -1,5 +1,7 @@
 # Pacotes por função em sei_insights — Plano de Implementação
 
+> **Status: ✅ IMPLEMENTADO** — verificado em 24/09/2026. Todos os passos concluídos (commits `60ff919`, `4c33d0e`, `273e4be`); suíte verde (58 testes OK); subpacotes `config/`, `clients/`, `documents/`, `storage/`, `utils/` confirmados.
+
 > **Para workers agentic:** SUB-SKILL OBRIGATÓRIA: use superpowers:subagent-driven-development (recomendado) ou superpowers:executing-plans para implementar este plano tarefa-a-tarefa. Passos usam caixa de seleção (`- [ ]`) para rastreio.
 
 **Goal:** Organizar os 11 módulos de `src/sei_insights/` (hoje planos) em subpacotes por função — `config/`, `clients/`, `documents/`, `storage/`, `utils/` — sem mudança de comportamento e com suíte idêntica à baseline (58 testes, OK).
@@ -50,7 +52,7 @@ Classes de entrada/modas de falha que a spec implica e que nenhum teste unitári
 - Consumes: venv com install editável da reorg anterior (baseline 58 testes OK).
 - Produces: `sei_insights.config` importável expondo as constantes `STATE_DIR`, `DATABASE_PATH`, `REGRAS_JSON`, `DEFAULT_ORGAO`, `DEFAULT_UNIDADE`, `DEFAULT_DIAS`, `DEFAULT_MIN_DELAY`, `DEFAULT_MAX_DELAY`, `DEFAULT_SAIDA`, `DEFAULT_TIMEOUT_MS`; dirs `clients/`, `documents/`, `storage/` presentes (consumidos pela Tarefa 2). Suite continua 58/OK (nada consumidor mudou ainda).
 
-- [ ] **Passo 1: criar `src/sei_insights/config/__init__.py`**
+- [x] **Passo 1: criar `src/sei_insights/config/__init__.py`**
 
 Conteúdo exato:
 
@@ -71,11 +73,11 @@ DEFAULT_SAIDA = "sei_insights.xlsx"
 DEFAULT_TIMEOUT_MS = 90_000
 ```
 
-- [ ] **Passo 2: criar os 3 `__init__.py` vazios**
+- [x] **Passo 2: criar os 3 `__init__.py` vazios**
 
 Crie `src/sei_insights/clients/__init__.py`, `src/sei_insights/documents/__init__.py` e `src/sei_insights/storage/__init__.py`, cada um com conteúdo vazio (0 bytes).
 
-- [ ] **Passo 3: verificar que o config importa e a suíte segue verde**
+- [x] **Passo 3: verificar que o config importa e a suíte segue verde**
 
 ```powershell
 & .venv\Scripts\python.exe -c "from sei_insights.config import STATE_DIR, DATABASE_PATH, REGRAS_JSON, DEFAULT_ORGAO, DEFAULT_UNIDADE, DEFAULT_DIAS, DEFAULT_MIN_DELAY, DEFAULT_MAX_DELAY, DEFAULT_SAIDA, DEFAULT_TIMEOUT_MS; print(STATE_DIR, DATABASE_PATH, REGRAS_JSON, DEFAULT_DIAS, DEFAULT_MIN_DELAY, DEFAULT_MAX_DELAY, DEFAULT_SAIDA, DEFAULT_TIMEOUT_MS)"
@@ -86,7 +88,7 @@ Expected: o import imprime os valores (`.state .state\sei_insights.sqlite3 regra
 
 Se `import sei_insights.config` falhar com `ModuleNotFoundError` (install editável não enxergando subpacote), rode `& .venv\Scripts\python.exe -m pip install -e .` e repita a verificação — é o remedo esperado; se ainda falhar, PARE e reporte BLOCKED.
 
-- [ ] **Passo 4: commit**
+- [x] **Passo 4: commit**
 
 ```powershell
 git add src/sei_insights/config/__init__.py src/sei_insights/clients/__init__.py src/sei_insights/documents/__init__.py src/sei_insights/storage/__init__.py
@@ -109,7 +111,7 @@ git commit -m "feat: módulo de configuração central e esqueleto dos subpacote
 - Consumes: `config` da Tarefa 1; dirs `clients/`, `documents/`, `storage/` da Tarefa 1; baseline 58/OK.
 - Produces: layout do §3 da spec; todos os imports internos e mocks apontando aos novos caminhos; suíte com tally **idêntica** à baseline.
 
-- [ ] **Passo 1: criar `src/sei_insights/utils/__init__.py` (vazio) e mover os 11 módulos com `git mv`**
+- [x] **Passo 1: criar `src/sei_insights/utils/__init__.py` (vazio) e mover os 11 módulos com `git mv`**
 
 Para evitar o conflito de nome da restrição global, o diretório `utils/` nasce nesta tarefa, junto com o movimento:
 
@@ -125,7 +127,7 @@ git mv rules.py src/sei_insights/config/
 
 Expected: `git status` mostra os 11 renames (2 com caminho final diferente do plano) e `?? src/sei_insights/utils/__init__.py`.
 
-- [ ] **Passo 2: reescrever imports nos 3 módulos movidos com imports internos**
+- [x] **Passo 2: reescrever imports nos 3 módulos movidos com imports internos**
 
 Aplicar as substituições EXATAS de linha:
 
@@ -141,7 +143,7 @@ Aplicar as substituições EXATAS de linha:
 
 `src/sei_insights/config/rules.py`, `clients/rate_limit.py`, `clients/captcha_solver.py`, `documents/tree.py`, `documents/text_ing.py`, `utils/helpers.py`: **nenhum import interno — conteúdo byte-idêntico** (não editar nada).
 
-- [ ] **Passo 3: reescrever `src/sei_insights/cli.py`**
+- [x] **Passo 3: reescrever `src/sei_insights/cli.py`**
 
 Substituições EXATAS:
 
@@ -173,7 +175,7 @@ Substituições EXATAS:
 
 `from pathlib import Path` permanece (ainda há `Path(args.saida)`).
 
-- [ ] **Passo 4: reescrever imports e mocks nos testes** (substituições EXATAS por arquivo)
+- [x] **Passo 4: reescrever imports e mocks nos testes** (substituições EXATAS por arquivo)
 
 - `tests/test_cli.py`:
   - `from sei_insights.cli import build_rows, now_str, parse_arguments` — **inalterado**.
@@ -204,7 +206,7 @@ Substituições EXATAS:
   - `from sei_insights.rate_limit import RateLimiter` → `from sei_insights.clients.rate_limit import RateLimiter`
   - Substitua **todas as 4 ocorrências** da sub-string `sei_insights.rate_limit.` por `sei_insights.clients.rate_limit.` (linhas 18-20 e 32: `time.sleep` ×2, `random.uniform`, `time.monotonic` — use replace-all do prefixo).
 
-- [ ] **Passo 5: verificação — nenhum caminho antigo restante**
+- [x] **Passo 5: verificação — nenhum caminho antigo restante**
 
 ```powershell
 Select-String -Path (Get-ChildItem -Path src\sei_insights -Recurse -Filter *.py | ForEach-Object FullName) -Pattern '^\s*from sei_insights\.(utils|store|rules|report|sei_client|discovery|rate_limit|captcha_solver|tree|text_ing) import'
@@ -214,7 +216,7 @@ Select-String -Path (Get-ChildItem -Path src\sei_insights -Recurse -Filter *.py 
 
 Expected: os três comandos sem resultado (vazio). (O `^(...) import` exige o nome do módulo logo após `sei_insights.`; caminhos novos inserem o pacote entre ambos e não casam.)
 
-- [ ] **Passo 6: rodar a suíte completa e comparar com a baseline**
+- [x] **Passo 6: rodar a suíte completa e comparar com a baseline**
 
 ```powershell
 & .venv\Scripts\python.exe -m unittest discover -s tests -v
@@ -222,7 +224,7 @@ Expected: os três comandos sem resultado (vazio). (O `^(...) import` exige o no
 
 Expected: tally **idêntica** à baseline (`Ran 58 tests`, `OK`, 58 passed / 0 skipped / 0 failed / 0 errors). Se qualquer teste falhar/errar, use systematic-debugging ANTES de continuar — não "conserta" no improviso.
 
-- [ ] **Passo 7: verificar layout final (sem módulo órfão) e smoke de imports**
+- [x] **Passo 7: verificar layout final (sem módulo órfão) e smoke de imports**
 
 ```powershell
 Get-ChildItem -Path src\sei_insights -Recurse -Filter *.py | ForEach-Object { $_.FullName.Replace((Get-Location).Path + '\', '') }
@@ -231,7 +233,7 @@ Get-ChildItem -Path src\sei_insights -Recurse -Filter *.py | ForEach-Object { $_
 
 Expected: a lista mostra apenas arquivos em subpastas + `cli.py`, `__main__.py`, `__init__.py` na raiz de `sei_insights`; import imprime `ok`.
 
-- [ ] **Passo 8: limpar `__pycache__` órfão da raiz do pacote antiga (se existir)**
+- [x] **Passo 8: limpar `__pycache__` órfão da raiz do pacote antiga (se existir)**
 
 ```powershell
 Remove-Item -Recurse -Force src\sei_insights\__pycache__ -ErrorAction SilentlyContinue
@@ -239,7 +241,7 @@ Remove-Item -Recurse -Force src\sei_insights\__pycache__ -ErrorAction SilentlyCo
 
 Expected: sem erro (pode não existir).
 
-- [ ] **Passo 9: commit**
+- [x] **Passo 9: commit**
 
 ```powershell
 git add src/sei_insights/ tests/
@@ -261,7 +263,7 @@ git commit -m "refactor: separa módulos em subpacotes por função (config, cli
 - Consumes: layout final da Tarefa 2 (caminhos `sei_insights.<pacote>.<módulo>`).
 - Produces: README consistente com os subpacotes; verificação final ponta-a-ponta (suíte, smoke, greps, git status).
 
-- [ ] **Passo 1: substituir a tabela "Estrutura do projeto"**
+- [x] **Passo 1: substituir a tabela "Estrutura do projeto"**
 
 Substitua a tabela atual pela seguinte (alinhada aos subpacotes):
 
@@ -289,7 +291,7 @@ Substitua a tabela atual pela seguinte (alinhada aos subpacotes):
 
 Não toque em nenhuma outra seção do README (instalação/execução/testes já estão corretos — entry points e nomes de módulos de teste não mudaram).
 
-- [ ] **Passo 2: verificar que o README está consistente**
+- [x] **Passo 2: verificar que o README está consistente**
 
 ```powershell
 Select-String -Path README.md -Pattern 'sei_insights/(utils\.py|store\.py|rules\.py|report\.py|sei_client\.py|discovery\.py|rate_limit\.py|captcha_solver\.py|tree\.py|text_ing\.py)'
@@ -298,7 +300,7 @@ Select-String -Path README.md -Pattern 'python main\.py'
 
 Expected: ambos sem resultado (nenhum caminho antigo na tabela nem referência legada).
 
-- [ ] **Passo 3: suíte final idêntica à baseline**
+- [x] **Passo 3: suíte final idêntica à baseline**
 
 ```powershell
 & .venv\Scripts\python.exe -m unittest discover -s tests -v
@@ -306,7 +308,7 @@ Expected: ambos sem resultado (nenhum caminho antigo na tabela nem referência l
 
 Expected: `Ran 58 tests`, `OK` (tally idêntica).
 
-- [ ] **Passo 4: smoke test dos entry points (venv, da raiz)**
+- [x] **Passo 4: smoke test dos entry points (venv, da raiz)**
 
 ```powershell
 & .venv\Scripts\python.exe -m sei_insights --help
@@ -315,7 +317,7 @@ Expected: `Ran 58 tests`, `OK` (tally idêntica).
 
 Expected: ambos imprimem o help do argparse (privadas: `--orgao` a `--saida`). Divergência cosmética em `usage:` aceita.
 
-- [ ] **Passo 5: `git status` sem artifacts e módulos da raiz removidos**
+- [x] **Passo 5: `git status` sem artifacts e módulos da raiz removidos**
 
 ```powershell
 git status --short
@@ -327,14 +329,14 @@ Expected:
 - nenhum `.py` na raiz do repo;
 - `src/sei_insights/` com: raiz (`__init__.py`, `__main__.py`, `cli.py`) + 5 subpastas (`config/`, `clients/`, `documents/`, `storage/`, `utils/`), cada uma com seu(s) módulo(s) e `__init__.py`.
 
-- [ ] **Passo 6: commit**
+- [x] **Passo 6: commit**
 
 ```powershell
 git add README.md
 git commit -m "docs: README reflete subpacotes por função (config, clients, documents, storage, utils)"
 ```
 
-- [ ] **Passo 7: resumo final**
+- [x] **Passo 7: resumo final**
 
 Apresente: renames/movimentos efetuados, tally da suíte = baseline, smoke ok, greps vazios, `git status` limpo. Não faça merge/push (fora do escopo).
 

@@ -7,3 +7,6 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# Relatório de status dos planos (não versionado)
+docs/status-implementacao-planos.md
