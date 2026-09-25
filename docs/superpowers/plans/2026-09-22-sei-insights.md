@@ -833,7 +833,7 @@ git commit -m "feat: leitura da árvore, correlação nó->URL e seleção do ú
   - `class RulesEngine(config: Optional[dict] = None)` with `classify(text: str) -> RuleResult` and a classmethod `from_file(path: pathlib.Path) -> RulesEngine`.
   - `regras.json`: ordered list of rules `{pattern, situacao, destino, acao_esperada, pendencia_curta}` + a `fallback` object.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_rules.py`:
 
@@ -892,12 +892,12 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(r.situacao, "Em análise")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_rules -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'rules'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `regras.json`:
 
@@ -997,12 +997,12 @@ class RulesEngine:
         return RuleResult(**self.fallback)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_rules -v`
 Expected: PASS (2 tests). The shipped `regras.json` is a starter set; the user calibrates terms later without touching code. During calibration, prefer concrete patterns named after real despachos (per spec §9 "calibração inicial").
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rules.py regras.json tests/test_rules.py
@@ -1024,7 +1024,7 @@ git commit -m "feat: motor de regras determinístico com regras.json"
   - `def expected_total(data: dict) -> int` — `int(data.get("itens") or 0)`.
   - `def pagination_params(inicio: int, rows_solr: int = 50) -> dict` — `{"isPaginacao": "true", "inicio": inicio, "rowsSolr": rows_solr}`.
 
-- [ ] **Step 1: Write the failing tests** (adjust fixture to the real JSON shape from the spike if different)
+- [x] **Step 1: Write the failing tests** (adjust fixture to the real JSON shape from the spike if different)
 
 `tests/test_discovery.py`:
 
@@ -1063,12 +1063,12 @@ class DiscoveryTest(unittest.TestCase):
                          {"isPaginacao": "true", "inicio": 50, "rowsSolr": 50})
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_discovery -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'discovery'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `discovery.py`:
 
@@ -1113,12 +1113,12 @@ def pagination_params(inicio: int, rows_solr: int = 50) -> dict:
     return {"isPaginacao": "true", "inicio": inicio, "rowsSolr": rows_solr}
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_discovery -v`
 Expected: PASS (5 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add discovery.py tests/test_discovery.py
@@ -1139,7 +1139,7 @@ git commit -m "feat: parsing da resposta de descoberta e parâmetros de paginaç
   - `def build_resumo(rows: list[ProcessRow], novos: list[ProcessRow]) -> dict` — `total`, `novos`, `por_situacao: dict[str,int]`, `por_status: dict[str,int]`.
   - `def write_spreadsheet(path: pathlib.Path, rows: list[ProcessRow], novos: list[ProcessRow], resumo: dict) -> None` — writes tabs "Aba principal" (all rows), "Novos" (new rows), "Resumo" (the counts). Column header order must match `ProcessRow` field order. An empty `rows` list still writes a valid workbook with headers and a zeroed summary.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_report.py`:
 
@@ -1195,12 +1195,12 @@ class ReportTest(unittest.TestCase):
             wb.close()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_report -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'report'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `report.py`:
 
@@ -1259,12 +1259,12 @@ def write_spreadsheet(
     wb.close()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_report -v`
 Expected: PASS (2 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add report.py tests/test_report.py
