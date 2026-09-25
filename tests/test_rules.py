@@ -61,3 +61,13 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(r.destino, "Subsecretaria de Gestão e Administração")
         self.assertNotIn("\x01", r.situacao)
         self.assertTrue(r.situacao.startswith("Encaminhado a "))
+
+    def test_regra_generica_captura_acao_e_destino(self):
+        engine = RulesEngine.from_file(Path("regras.json"))
+        r = engine.classify(
+            "O processo segue para análise da SGA, para adoção das providências."
+        )
+        self.assertEqual(r.situacao, "Aguardando análise de SGA")
+        self.assertEqual(r.destino, "SGA")
+        self.assertEqual(r.acao_esperada, "análise")
+        self.assertEqual(r.pendencia_curta, "Aguardando análise de SGA")

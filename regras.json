@@ -63,11 +63,11 @@
       "pendencia_curta": "Processo encaminhado para análise/providências"
     },
     {
-      "pattern": "(?:para|com vistas a)\\s+(?:ciência|análise|manifestação|parecer|providências)\\s+(?:da|do|de)\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s*$)",
-      "situacao": "Aguardando \\2 de \\1",
-      "destino": "\\1",
-      "acao_esperada": "\\2",
-      "pendencia_curta": "Aguardando \\2 de \\1"
+      "pattern": "(?:para|com vistas a)\\s+((?:ciência|análise|manifestação|parecer|providências))\\s+(?:da|do|de)\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s*$)",
+      "situacao": "Aguardando \\1 de \\2",
+      "destino": "\\2",
+      "acao_esperada": "\\1",
+      "pendencia_curta": "Aguardando \\1 de \\2"
     },
     {
       "pattern": "(?:determino|determina[\\- ]?se|determinam[\\- ]?se)\\s+o\\s+arquivamento",
