@@ -21,10 +21,18 @@ def build_resumo(rows: list[ProcessRow], novos: list[ProcessRow]) -> dict:
     }
 
 
+TEXT_FORMAT = "@"
+
+
 def _fill_sheet(sheet, rows: list[ProcessRow]) -> None:
     sheet.append(FIELDS)
     for r in rows:
         sheet.append([getattr(r, f) for f in FIELDS])
+    for ws_row in sheet.iter_rows(
+        min_row=1, max_row=sheet.max_row, min_col=1, max_col=sheet.max_column
+    ):
+        for cell in ws_row:
+            cell.number_format = TEXT_FORMAT
 
 
 def write_spreadsheet(

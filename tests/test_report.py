@@ -10,8 +10,8 @@ from sei_insights.storage.mirror import ProcessRow
 
 def row(numero: str, situacao: str = "Na CTI", status: str = "concluído") -> ProcessRow:
     return ProcessRow(
-        numero=numero, titulo="t", data_execucao="2026-09-22 10:00:00",
-        data_analise="2026-09-22 10:00:00", data_ultimo_despacho="",
+        numero=numero, data_execucao="2026-09-22 10:00:00",
+        data_ultimo_despacho="15/09/2026",
         situacao=situacao, destino="", acao_esperada="", pendencia_curta="",
         link_process="url", status_coleta=status, hash_ultimo_despacho="h",
     )
@@ -29,7 +29,14 @@ class ReportTest(unittest.TestCase):
             self.assertEqual(wb.sheetnames, ["Aba principal", "Novos", "Resumo"])
             principal = wb["Aba principal"]
             self.assertEqual(principal.max_row, len(rows) + 1)
-            self.assertEqual(principal.cell(row=1, column=1).value, "numero")
+            self.assertEqual(principal.max_column, 10)
+            headers = [principal.cell(row=1, column=c).value
+                       for c in range(1, principal.max_column + 1)]
+            self.assertEqual(headers, [
+                "numero", "data_execucao", "data_ultimo_despacho", "situacao",
+                "destino", "acao_esperada", "pendencia_curta", "status_coleta",
+                "hash_ultimo_despacho", "link_process",
+            ])
             self.assertEqual(principal.cell(row=2, column=1).value, "001")
             nov = wb["Novos"]
             self.assertEqual(nov.max_row, len(novos) + 1)
@@ -46,4 +53,23 @@ class ReportTest(unittest.TestCase):
             self.assertEqual(wb.sheetnames, ["Aba principal", "Novos", "Resumo"])
             self.assertEqual(wb["Aba principal"].max_row, 1)
             self.assertEqual(wb["Resumo"]["B2"].value, 0)
+            wb.close()
+
+    def test_numero_de_processo_forcado_como_texto(self):
+        """Números de processo ('21260.002715/2026-53') contêm '-', '.', '/'.
+        O Excel os trataria como número/erro; a célula deve usar formato Texto."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "texto.xlsx"
+            rows = [row("21260.002715/2026-53"), row("21260.002716/2026-54")]
+            write_spreadsheet(path, rows, rows[:1], build_resumo(rows, rows[:1]))
+            wb = load_workbook(path)
+            for name in ("Aba principal", "Novos"):
+                ws = wb[name]
+                for ws_row in ws.iter_rows(min_row=1, max_row=ws.max_row,
+                                           min_col=1, max_col=ws.max_column):
+                    for cell in ws_row:
+                        self.assertEqual(
+                            cell.number_format, "@",
+                            f"{name}!{cell.coordinate} deveria usar formato Texto",
+                        )
             wb.close()

@@ -14,12 +14,12 @@ from sei_insights.config import (
     DEFAULT_TIMEOUT_MS,
 )
 from sei_insights.storage.report import build_resumo, write_spreadsheet
-from sei_insights.clients.sei_client import ProcessResult, PublicDocument, SeiClient
+from sei_insights.clients.sei_client import ProcessResult, SeiClient
 from sei_insights.storage.mirror import MirrorStore, ProcessRow, despacho_hash
 from sei_insights.clients.rate_limit import RateLimiter
 from sei_insights.config.rules import RulesEngine
 from sei_insights.documents.text_ing import extract_text_from_pdf
-from sei_insights.documents.tree import correlate_urls, parse_tree, select_last_despacho
+from sei_insights.documents.tree import parse_tree, select_last_despacho
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)-8s | %(message)s",
@@ -71,8 +71,16 @@ def build_rows(
 ) -> tuple[list[ProcessRow], list[ProcessRow]]:
     rows: list[ProcessRow] = []
     novos: list[ProcessRow] = []
+    # Cache também casa pela URL do processo: a descoberta pode vir por nº de
+    # documento (data-prot) numa execução e por nº canônico noutra; a URL da
+    # página do processo é a identidade estável entre execuções.
+    previous_by_link: dict[str, ProcessRow] = {
+        prev_row.link_process: prev_row
+        for prev_row in previous.values()
+        if prev_row.link_process
+    }
     for p in found:
-        prev = previous.get(p.number)
+        prev = previous.get(p.number) or previous_by_link.get(p.url)
         row = None
         # Pula analyze se houver cache, não forçado, E hash bate (mesmo último despacho)
         if prev is not None and not force:
@@ -81,10 +89,10 @@ def build_rows(
             try:
                 current_row = analyze(p, prev, force, now)
                 if current_row.hash_ultimo_despacho == prev.hash_ultimo_despacho:
-                    # Hash inalterado: usa dados do cache, preserva data de análise original
+                    # Hash inalterado: usa dados do cache
                     row = ProcessRow(
-                        numero=p.number, titulo=p.title, data_execucao=now,
-                        data_analise=prev.data_analise, data_ultimo_despacho=prev.data_ultimo_despacho,
+                        numero=p.number, data_execucao=now,
+                        data_ultimo_despacho=prev.data_ultimo_despacho,
                         situacao=prev.situacao, destino=prev.destino, acao_esperada=prev.acao_esperada,
                         pendencia_curta=prev.pendencia_curta, link_process=p.url,
                         status_coleta="concluído (cache)", hash_ultimo_despacho=prev.hash_ultimo_despacho,
@@ -95,8 +103,7 @@ def build_rows(
             except Exception as exc:
                 logger.warning("Erro ao analisar %s: %s", p.number, exc)
                 row = ProcessRow(
-                    numero=p.number, titulo=p.title, data_execucao=now,
-                    data_analise=now, data_ultimo_despacho="",
+                    numero=p.number, data_execucao=now, data_ultimo_despacho="",
                     situacao="Erro / retry", destino="", acao_esperada="",
                     pendencia_curta="", link_process=p.url,
                     status_coleta=f"erro: {exc}", hash_ultimo_despacho="",
@@ -107,14 +114,13 @@ def build_rows(
             except Exception as exc:
                 logger.warning("Erro ao analisar %s: %s", p.number, exc)
                 row = ProcessRow(
-                    numero=p.number, titulo=p.title, data_execucao=now,
-                    data_analise=now, data_ultimo_despacho="",
+                    numero=p.number, data_execucao=now, data_ultimo_despacho="",
                     situacao="Erro / retry", destino="", acao_esperada="",
                     pendencia_curta="", link_process=p.url,
                     status_coleta=f"erro: {exc}", hash_ultimo_despacho="",
                 )
         rows.append(row)
-        if row.numero not in previous:
+        if prev is None:
             novos.append(row)
     return rows, novos
 
@@ -180,15 +186,13 @@ def analyze_process(
     PDF digitalizado não congela o cache.
     """
     html = client.open_process(p)
-    docs = client.extract_documents(html, p.url)
-    links = [(d.name, d.url) for d in docs]
-    nodes = correlate_urls(parse_tree(html), links)
+    nodes = parse_tree(html)
     despacho = select_last_despacho(nodes)
 
     if despacho is None:
+        # Sem despacho na árvore: não há o que baixar.
         return ProcessRow(
-            numero=p.number, titulo=p.title, data_execucao=now,
-            data_analise=now, data_ultimo_despacho="",
+            numero=p.number, data_execucao=now, data_ultimo_despacho="",
             situacao="Sem despacho público", destino="", acao_esperada="",
             pendencia_curta="", link_process=p.url,
             status_coleta="concluído", hash_ultimo_despacho="",
@@ -200,8 +204,7 @@ def analyze_process(
     if prev is not None and not force and prev.hash_ultimo_despacho == novo_hash:
         # Mesmo último despacho já analisado: reaproveita o cache completo.
         return ProcessRow(
-            numero=p.number, titulo=p.title, data_execucao=now,
-            data_analise=prev.data_analise,
+            numero=p.number, data_execucao=now,
             data_ultimo_despacho=prev.data_ultimo_despacho,
             situacao=prev.situacao, destino=prev.destino,
             acao_esperada=prev.acao_esperada, pendencia_curta=prev.pendencia_curta,
@@ -209,8 +212,22 @@ def analyze_process(
             hash_ultimo_despacho=novo_hash,
         )
 
-    doc = PublicDocument(number=despacho.numero, name=despacho.serie, url=despacho.url)
-    path, _, _ = client.download_document(p.number, doc)
+    # O download do despacho é por CLIQUE no link da árvore do SEI
+    # (download_despacho). Sem link público, o despacho é tratado como
+    # sem download possível, sem tentar rede.
+    result = client.download_despacho(
+        p.number, despacho.numero, despacho.serie,
+    )
+
+    if result is None:
+        return ProcessRow(
+            numero=p.number, data_execucao=now, data_ultimo_despacho="",
+            situacao="Sem despacho público", destino="", acao_esperada="",
+            pendencia_curta="", link_process=p.url,
+            status_coleta="concluído", hash_ultimo_despacho="",
+        )
+
+    path, _, _ = result
     text = extract_text_from_pdf(path)
 
     if text == "":
@@ -224,8 +241,8 @@ def analyze_process(
         pendencia_curta = r.pendencia_curta
 
     return ProcessRow(
-        numero=p.number, titulo=p.title, data_execucao=now,
-        data_analise=now, data_ultimo_despacho=despacho.data,
+        numero=p.number, data_execucao=now,
+        data_ultimo_despacho=despacho.data,
         situacao=situacao, destino=destino, acao_esperada=acao_esperada,
         pendencia_curta=pendencia_curta, link_process=p.url,
         status_coleta="concluído", hash_ultimo_despacho=novo_hash,
@@ -249,8 +266,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         browser: Optional[Browser] = None
         context: Optional[BrowserContext] = None
-        try:
-            with sync_playwright() as playwright:
+        rows: list[ProcessRow] = []
+        novos: list[ProcessRow] = []
+        with sync_playwright() as playwright:
+            try:
                 browser, context, page = create_browser(playwright, headless=False)
                 client = SeiClient(context=context, page=page, rate_limiter=rate_limiter)
                 client.use_manual_captcha = args.manual_captcha
@@ -264,12 +283,25 @@ def main(argv: Optional[list[str]] = None) -> int:
                     return analyze_process(client, p, prev, force, now, rules)
 
                 rows, novos = build_rows(previous, found, analyze, args.force, now)
-        finally:
-            if context is not None:
-                save_browser_state(context)
-                context.close()
-            if browser is not None:
-                browser.close()
+            finally:
+                # Fechamos o context/browser AINDA DENTRO do bloco
+                # `with sync_playwright()`: depois disso o event loop já
+                # está parado e o close() falha com "Event loop is closed!".
+                if context is not None:
+                    save_browser_state(context)
+                    try:
+                        context.close()
+                    except Exception as exc:
+                        logger.warning(
+                            "Não foi possível fechar o contexto: %s", exc,
+                        )
+                if browser is not None:
+                    try:
+                        browser.close()
+                    except Exception as exc:
+                        logger.warning(
+                            "Não foi possível fechar o navegador: %s", exc,
+                        )
 
         write_spreadsheet(Path(args.saida), rows, novos, build_resumo(rows, novos))
         store.replace_snapshot(rows)

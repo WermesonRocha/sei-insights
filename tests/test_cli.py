@@ -13,8 +13,8 @@ from sei_insights.storage.mirror import ProcessRow, despacho_hash
 
 def row(numero: str, situacao: str = "Na CTI", hash_: str = "h") -> ProcessRow:
     return ProcessRow(
-        numero=numero, titulo="t", data_execucao="2026-09-21 10:00:00",
-        data_analise="2026-09-21 10:00:00", data_ultimo_despacho="",
+        numero=numero, data_execucao="2026-09-21 10:00:00",
+        data_ultimo_despacho="15/09/2026",
         situacao=situacao, destino="", acao_esperada="", pendencia_curta="",
         link_process="u", status_coleta="concluído", hash_ultimo_despacho=hash_,
     )
@@ -43,7 +43,7 @@ class BuildRowsTest(unittest.TestCase):
         rows, novos = build_rows(previous, [pr("001")], analyze, False, now_str())
         self.assertEqual(calls, ["001"])  # analyze chamado para obter hash
         self.assertEqual(rows[0].situacao, "Guardada")  # mas situação do cache preservada
-        self.assertEqual(rows[0].data_analise, "2026-09-21 10:00:00")  # data_analise original
+        self.assertEqual(rows[0].data_ultimo_despacho, "15/09/2026")  # dados do cache preservados
         self.assertEqual(novos, [])
 
     def test_force_reanalisa_mesmo_com_cache(self):
@@ -70,7 +70,7 @@ class BuildRowsTest(unittest.TestCase):
         self.assertEqual(novos, [])  # não é novo processo, só atualizado
 
     def test_hash_igual_usa_cache(self):
-        """Se hash do último despacho não mudou, usa cache (preserva data_analise original)."""
+        """Se hash do último despacho não mudou, usa cache (preserva dados originais)."""
         calls = []
         def analyze(p, prev, force, now):
             calls.append(p.number)
@@ -79,7 +79,7 @@ class BuildRowsTest(unittest.TestCase):
         rows, novos = build_rows(previous, [pr("001")], analyze, False, now_str())
         self.assertEqual(calls, ["001"])  # analyze chamado para obter hash
         self.assertEqual(rows[0].situacao, "Cache")  # mas situação do cache preservada
-        self.assertEqual(rows[0].data_analise, "2026-09-21 10:00:00")  # data original preservada
+        self.assertEqual(rows[0].data_ultimo_despacho, "15/09/2026")  # dados originais preservados
         self.assertEqual(novos, [])
 
     def test_erro_vira_linha_nao_bloqueia(self):
@@ -90,6 +90,43 @@ class BuildRowsTest(unittest.TestCase):
         self.assertTrue(rows[0].status_coleta.startswith("erro:"))
         self.assertEqual(rows[0].situacao, "Erro / retry")
         self.assertEqual(novos, rows)
+
+    def test_cache_por_url_quando_numero_da_busca_mudou(self):
+        """Processo descoberto nesta execução por nº de documento ainda acha
+        o cache da execução anterior, que usava o nº canônico (chave: URL)."""
+        target = "url/21260.002715/2026-53"
+        prev_row = row("21260.002715/2026-53", "Guardada", "h")
+        prev_row.link_process = target
+        previous = {"21260.002715/2026-53": prev_row}
+        found = [ProcessResult(number="64534686", url=target, title="t")]
+        calls = []
+        def analyze(p, prev, force, now):
+            # Simula analyze_process: open_process canoniza o nº via cabeçalho.
+            calls.append(p.number)
+            p.number = "21260.002715/2026-53"
+            return row(p.number, "Cache", prev.hash_ultimo_despacho if prev else "h")
+        rows, novos = build_rows(previous, found, analyze, False, now_str())
+        self.assertEqual(calls, ["64534686"])
+        self.assertEqual(rows[0].numero, "21260.002715/2026-53")
+        self.assertEqual(rows[0].situacao, "Guardada")
+        self.assertEqual(rows[0].data_ultimo_despacho, "15/09/2026")
+        self.assertEqual(novos, [])
+
+    def test_processo_em_cache_nao_conta_como_novo_quando_numero_canonizado(self):
+        """Cache antigo chaveado por nº de documento + linha com nº canônico
+        canônico: processo conhecido não deve aparecer como "novo"."""
+        target = "url/21260.002715/2026-53"
+        prev_row = row("64534686", "Guardada", "h")
+        prev_row.link_process = target
+        previous = {"64534686": prev_row}
+        found = [ProcessResult(number="64534686", url=target, title="t")]
+        def analyze(p, prev, force, now):
+            p.number = "21260.002715/2026-53"  # open_process canoniza via cabeçalho
+            return row(p.number, "Cache", prev.hash_ultimo_despacho if prev else "h")
+        rows, novos = build_rows(previous, found, analyze, False, now_str())
+        self.assertEqual(rows[0].numero, "21260.002715/2026-53")
+        self.assertEqual(rows[0].situacao, "Guardada")
+        self.assertEqual(novos, [])
 
 
 class ArgParseTest(unittest.TestCase):
@@ -187,11 +224,13 @@ def rules_deterministicas():
 
 
 class FakeClient:
-    def __init__(self, html="", docs=None, pdf_path=None, download_err=None):
+    def __init__(self, html="", docs=None, pdf_path=None, download_err=None,
+                 despacho_link=True):
         self.html = html
         self.docs = docs or []
         self.pdf_path = pdf_path
         self.download_err = download_err
+        self.despacho_link = despacho_link
         self.open_process_calls = 0
         self.download_calls = 0
 
@@ -201,6 +240,14 @@ class FakeClient:
 
     def extract_documents(self, html, url):
         return self.docs
+
+    def download_despacho(self, process_number, numero, serie):
+        self.download_calls += 1
+        if self.download_err is not None:
+            raise self.download_err
+        if not self.despacho_link:
+            return None
+        return self.pdf_path, "sha256", "application/pdf"
 
     def download_document(self, process_number, document):
         self.download_calls += 1
@@ -223,12 +270,13 @@ class AnalyzePipelineTest(unittest.TestCase):
         self.p = pr("21260.003436/2026-15")
         self.h100003 = despacho_hash("100003|15/09/2026")
 
-    def _client(self, tmp, html, b64, download_err=None):
+    def _client(self, tmp, html, b64, download_err=None, despacho_link=True):
         return FakeClient(
             html=html,
             docs=docs_correlacionados(),
             pdf_path=temp_pdf(tmp, "d.pdf", b64) if b64 else None,
             download_err=download_err,
+            despacho_link=despacho_link,
         )
 
     def test_despacho_encontrado_aplica_regra(self):
@@ -239,10 +287,26 @@ class AnalyzePipelineTest(unittest.TestCase):
         self.assertEqual(r.situacao, "SCIENTIA CIENCIA")
         self.assertEqual(r.data_ultimo_despacho, "15/09/2026")
         self.assertEqual(r.hash_ultimo_despacho, self.h100003)
-        self.assertEqual(r.data_analise, self.NOW)
         self.assertEqual(r.status_coleta, "concluído")
         self.assertEqual(r.numero, self.p.number)
         self.assertEqual(r.link_process, self.p.url)
+
+    def test_despacho_sem_link_publico_nao_baixa(self):
+        """Despacho na árvore sem link público não é baixado.
+
+        O download é por CLIQUE no link da árvore; sem link público
+        (restrito), download_despacho devolve None e a linha vira
+        "Sem despacho público" sem tentar baixar.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(html=TREE_WITH_DESPACHO,
+                                docs=docs_correlacionados(),
+                                pdf_path=None, despacho_link=False)
+            r = analyze_process(client, self.p, None, False, self.NOW, self.rules)
+        self.assertEqual(r.situacao, "Sem despacho público")
+        self.assertEqual(r.data_ultimo_despacho, "")
+        self.assertEqual(r.hash_ultimo_despacho, "")
+        self.assertEqual(r.status_coleta, "concluído")
 
     def test_sem_despacho_publico_nao_baixa(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -264,14 +328,13 @@ class AnalyzePipelineTest(unittest.TestCase):
         self.assertEqual(r.hash_ultimo_despacho, self.h100003)
         self.assertEqual(r.status_coleta, "concluído")
 
-    def test_cache_reutilizavel_nao_baixa_e_preserva_analise(self):
+    def test_cache_reutilizavel_nao_baixa_e_preserva_dados(self):
         prev = row(self.p.number, "Aguardando retorno", hash_=self.h100003)
         with tempfile.TemporaryDirectory() as tmp:
             client = self._client(tmp, TREE_WITH_DESPACHO, PDF_WITH_TEXT_B64)
             r = analyze_process(client, self.p, prev, False, self.NOW, self.rules)
         self.assertEqual(client.download_calls, 0)
-        self.assertEqual(r.data_analise, prev.data_analise)
-        self.assertNotEqual(r.data_analise, self.NOW)
+        self.assertEqual(r.data_ultimo_despacho, prev.data_ultimo_despacho)
         self.assertEqual(r.hash_ultimo_despacho, self.h100003)
         self.assertEqual(r.status_coleta, "concluído (cache)")
         self.assertEqual(r.situacao, prev.situacao)
@@ -282,12 +345,13 @@ class AnalyzePipelineTest(unittest.TestCase):
             client = self._client(tmp, TREE_WITH_DESPACHO, PDF_WITH_TEXT_B64)
             r = analyze_process(client, self.p, prev, True, self.NOW, self.rules)
         self.assertEqual(client.download_calls, 1)
-        self.assertEqual(r.data_analise, self.NOW)
+        self.assertEqual(r.data_ultimo_despacho, "15/09/2026")
         self.assertEqual(r.situacao, "SCIENTIA CIENCIA")
 
     def test_erro_no_download_vira_linha_de_erro_em_build_rows(self):
         client = FakeClient(html=TREE_WITH_DESPACHO, docs=docs_correlacionados(),
-                            download_err=RuntimeError("boom download"))
+                            download_err=RuntimeError("boom download"),
+                            despacho_link=True)
 
         def analyze(p, prev, force, now):
             return analyze_process(client, p, prev, force, now, self.rules)

@@ -85,7 +85,9 @@ O fluxo de execução é o seguinte:
 
 ```
 busca por unidade + período (+ 3 tipos de pesquisa marcados)
-  → lista de números de processos públicos (deduplicada)
+  → linhas de resultado (processos E documentos — 1 linha por documento)
+  → dedupe pela URL do processo → 1 resultado por processo
+  → número canônico do processo (cabeçalho "Processo:" da página pública)
   → diff com o espelho anterior (SQLite) → "novos"
   → para cada processo:
         página pública
@@ -103,8 +105,18 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    é preenchida com Órgão (`MMulheres`), Unidade
    (`MMULHERES-SE-SGA-CGATI-CTI-DTI`), período e as três opções
    "Pesquisar em" (Processos, Documentos Gerados, Documentos Externos).
-   A resposta AJAX (POST com paginação `isPaginacao`) é observada e os
-   números de processo são extraídos e **deduplicados**.
+   A resposta AJAX (POST com paginação `isPaginacao`) é observada e as
+   linhas de resultado são extraídas.
+
+   Como os três tipos de pesquisa estão marcados, o SEI devolve **uma
+   linha por item que casar**: processos **e** documentos. Uma linha de
+   documento carrega o `data-prot` = número do **documento** e um link
+   (`md_pesq_processo_exibir.php`) para o **processo-pai** — ou seja, o
+   mesmo processo pode aparecer várias vezes na busca (uma vez por
+   documento seu). A **dedupe é feita pela URL do processo**, não pelo
+   número: todas as linhas que apontam para a mesma página de processo
+   colapsam em um único resultado. Sem isso, um processo descoberto por
+   N documentos era visitado e baixado N vezes (bug real).
 
 2. **Paginação**: o módulo devolve até 50 resultados por página
    (`rowsSolr=50`). Páginas seguintes avançam o parâmetro `inicio`; como
@@ -112,7 +124,12 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
 
 3. **Navegação ao processo** (`sei_client.py`): segue o link público
    `md_pesq_processo_exibir.php` fornecido pelo próprio resultado da
-   pesquisa — nenhum link é fabricado.
+   pesquisa — nenhum link é fabricado. Ao abrir a página, o programa lê o
+   cabeçalho (`#tblCabecalho`, linha **`Processo:`**) e usa esse número
+   como o **número canônico** do processo — pasta da planilha e da
+   `downloads/`. Assim, mesmo quando o processo foi descoberto por uma
+   linha de documento (que só tem o número do documento), a linha da
+   planilha e a pasta usam o número real do processo.
 
 4. **Árvore de documentos** (`tree.py`): a página pública monta a árvore
    via JavaScript. Para cada documento são lidos a **série documental**
@@ -400,25 +417,34 @@ Arquivo `sei_insights.xlsx` (ou o caminho de `--saida`) com **três abas**:
 
 - **Aba principal** — espelho do estado atual: **uma linha por processo**
   com as colunas abaixo;
-- **Novos** — processos que **não** estavam no espelho anterior (mesma
-  estrutura da aba principal);
-- **Resumo** — contagens: total, novos, por situação e por status de
-  coleta.
+- **Novos** — processos que **nunca** foram vistos no espelho anterior
+  (não casaram nem por número nem por URL; mesma estrutura da aba
+  principal);
+- **Resumo** — contagens: `total`, `novos`, `por_situacao` e
+  `por_status` (cada `métrica | valor` em uma linha).
 
-| Coluna               | Conteúdo                                                    |
-| -------------------- | ----------------------------------------------------------- |
-| `numero`             | Número do processo (normalizado).                           |
-| `titulo`             | Título exibido na pesquisa pública.                         |
-| `data_execucao`      | Data/hora da execução que gerou a linha.                    |
-| `data_analise`       | Data/hora em que a situação foi calculada. Uma "vitória do cache" pode mantê-la mais antiga que a execução. |
-| `data_ultimo_despacho` | Data do último Despacho (quando conhecida).              |
-| `situacao`           | Situação classificada (ex.: "Aguardando providências de X"). |
-| `destino`            | Unidade/órgão de destino.                                   |
-| `acao_esperada`      | Ação pedida (análise, assinatura, retorno, providências...). |
-| `pendencia_curta`    | Resumo de 1 linha: o que falta e quem está com o processo.  |
-| `link_process`       | URL pública do processo.                                    |
-| `status_coleta`      | `concluído`, `concluído (cache)` ou `erro: <mensagem>`.     |
-| `hash_ultimo_despacho` | Hash SHA-256 do identificador do último Despacho (usado pelo cache). |
+### As colunas da planilha
+
+Cada linha da aba principal (e da aba Novos) corresponde a **um processo**:
+
+| Coluna | Explicação |
+| ------ | ---------- |
+| `numero` | Número **canônico** do processo (`NNNNN.NNNNNN/AAAA-NN`), lido do cabeçalho da página pública (`Processo:`), normalizado. Mesmo quando a busca descobre o processo via uma linha de documento, aqui vale o número do **processo** — nunca o número do documento. É a chave primária no espelho SQLite. |
+| `data_execucao` | Data/hora (`AAAA-MM-DD HH:MM:SS`) da execução que gravou/atualizou a linha. |
+| `data_ultimo_despacho` | Data do último Despacho da árvore de documentos (`dd/mm/aaaa`), quando presente no DOM. Vazia quando não há despacho público ou a data não foi exibida. |
+| `situacao` | Situação classificada pelo motor de regras a partir do texto do último Despacho (ex.: "Aguardando providências de X"). Valores especiais: `Sem despacho público`, `Texto não extraível (digitalizado?)`, fallback `Em análise` e `Erro / retry`. |
+| `destino` | Unidade/órgão de destino apontado pelo despacho (a regra pode expandir `\1` dos grupos capturados). Vazia quando a situação não envolve destinatário. |
+| `acao_esperada` | Ação pedida pelo despacho (análise, assinatura, retorno, providências, ciência...). Vazia quando não se aplica. |
+| `pendencia_curta` | Resumo de uma linha: **quem está com o processo** e **o que falta**. Vazia quando não há pendência identificada. |
+| `status_coleta` | Como a linha foi produzida: `concluído` (analisado nesta execução, com download quando aplicável), `concluído (cache)` (reaproveitada da execução anterior porque o hash não mudou) ou `erro: <mensagem>` (falha isolada, não interrompe os demais). |
+| `hash_ultimo_despacho` | SHA-256 do identificador `número\|data` do último Despacho. Base do cache: inalterado → análise preservada; mudou → reanálise e novo download. É hash do **identificador**, não do texto do PDF (intencional). |
+| `link_process` | URL pública do processo (`md_pesq_processo_exibir.php?TOKEN`) — **última coluna**. É a **identidade estável** do processo entre execuções: usada na dedupe da descoberta e como chave alternativa do cache. |
+
+> **Todos os valores das abas principal e Novos são gravados como Texto**
+> (formato `@`). Assim o Excel não tenta interpretar `numero`
+> (`21260.002715/2026-53` tem `.`, `/`, `-`), hashes ou links como número,
+> evitando triângulos de erro e conversões indesejadas. A aba Resumo
+> mantém `total`/`novos` como números reais.
 
 A planilha é **substituída a cada execução** (espelho do momento). Um
 resultado vazio (0 processos) é válido: a planilha é gerada com as abas
@@ -550,17 +576,34 @@ processo:
 
 - **sem cache ou com `--force`** → analisa do zero;
 - **com cache e hash inalterado** → usa os dados da análise anterior
-  (campo `data_analise` preservado), marcando `status_coleta` como
-  `concluído (cache)`. A linha continua sendo gravada na planilha;
+  (situação, destino, ação esperada, pendência e data do despacho
+  preservados), marcando `status_coleta` como `concluído (cache)`. A
+  linha continua sendo gravada na planilha;
 - **com cache e hash mudou** (novo Despacho no SEI) → **reanalisa**
   o processo com a análise nova;
 - **falha ao analisar** → gera linha `Erro / retry` com `status_coleta`
   = `erro: <mensagem>`, sem interromper os demais processos.
 
+A linha do espelho anterior é localizada primeiro pelo **número** e, se
+não houver correspondência, pela **URL** (`link_process`). Isso importa
+porque a descoberta pode usar números diferentes entre execuções (nº de
+documento num dia, nº de documento de outro documento no dia seguinte),
+mas a URL da página do processo é estável. Um processo é considerado
+**"novo"** apenas quando **nunca** foi visto antes — não casa nem por
+número nem por URL.
+
 O hash é calculado sobre o **identificador do Despacho**, **não** sobre o
 texto extraído. Isso é intencional: um PDF digitalizado (sem camada de
 texto) não "congela" o processo — se o Despacho mudar, o identificador
 muda e o processo é rebaixado e reanalisado na próxima execução.
+
+> **Cache não verifica o arquivo em disco.** Quando o hash não muda, a
+> análise anterior é reaproveitada **sem conferir se o PDF ainda existe**
+> em `downloads/`. Se os arquivos forem apagados manualmente (ex.: para
+> limpar os duplicados antigos), a próxima execução continuará marcando o
+> processo como `concluído (cache)` e não baixará de novo. Para forçar o
+> download, rode `python -m sei_insights --force` (ou limpe o histórico,
+> veja [Como limpar os dados](#como-limpar-os-dados-ou-reprocessar)).
 
 > **Nota sobre a janela:** o espelho guarda apenas a última execução.
 > Alternar a janela entre execuções (ex.: `--dias 7` ↔ `--dias 30`) pode
@@ -669,6 +712,21 @@ e adicione um padrão para o caso real observado.
 **O processo ficou com `status_coleta = erro: ...`**
 Um processo com falha não interrompe os demais. Corrija a causa indicada
 na mensagem e rode `--force` para tentar novamente.
+
+**Rodei e nada foi baixado — só "concluído (cache)"**
+Normal. Quando o último Despacho não mudou desde a execução anterior
+(mesmo `hash_ultimo_despacho`), o programa reaproveita a análise e **não
+rebaixa o PDF** — é o comportamento do cache. Atenção: o cache **não**
+confere se o PDF ainda existe em `downloads/`. Se você apagou os arquivos
+à mão, use `python -m sei_insights --force` para baixar de novo.
+
+**O processo apareceu com número `NNNNN.NNNNNN/AAAA-NN` que não era o que
+eu vi na busca**
+A busca devolve linhas de **documentos** (porque os "tipos de pesquisa"
+também estão marcados) e uma linha de documento só mostra o número do
+**documento**. O programa deduplica pela URL do processo e, ao abrir a
+página, usa o número canônico do cabeçalho (`Processo:`). Ou seja, o
+número da planilha é sempre o do **processo**, não o do documento.
 
 **A biblioteca `ddddocr` não instala (Linux/Windows)**
 Ela depende de `onnxruntime`/`opencv-python-headless`; em caso de

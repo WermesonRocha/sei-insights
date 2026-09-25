@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -15,7 +15,12 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from sei_insights.config import DEFAULT_TIMEOUT_MS
 
 from sei_insights.clients.captcha_solver import CaptchaSolver
-from sei_insights.clients.discovery import expected_total, pagination_params, parse_response
+from sei_insights.clients.discovery import (
+    expected_total,
+    extract_process_number,
+    pagination_params,
+    parse_response,
+)
 from sei_insights.clients.rate_limit import RateLimiter
 from sei_insights.utils.helpers import normalize_process_number, safe_filename, calculate_sha256, extension_from_content_type, looks_like_html, unique_path
 
@@ -25,6 +30,32 @@ BASE_URL = "https://colaboragov.sei.gov.br/sei/"
 PUBLIC_SEARCH_URL = "https://colaboragov.sei.gov.br/sei/modulos/pesquisa/md_pesq_processo_pesquisar.php?acao_externa=protocolo_pesquisar&acao_origem_externa=protocolo_pesquisar&id_orgao_acesso_externo=7"
 SEARCH_PAGE_SIZE = 50
 MAX_RETRIES = 3
+
+# A tabela de documentos do processo (#tblDocumentos) é montada via JS; o
+# link do despacho pode demorar a aparecer no DOM.
+DESPACHO_TREE_TIMEOUT_MS = 45_000
+
+# Fluxo do modal "Gerar PDF" (#divInfraModal): o SEI valida o CAPTCHA ao
+# gerar o PDF do(s) documento(s) selecionado(s). Tentativas e timeouts.
+PDF_DOWNLOAD_TIMEOUT_MS = 300_000
+PDF_ATTEMPTS = 3
+PDF_CAPTCHA_POLL_INTERVAL_MS = 500
+PDF_CAPTCHA_TIMEOUT_MS = 30_000
+PDF_CONTENT_TYPE = "application/pdf"
+
+
+def _is_transient_download_exception(exc: Exception) -> bool:
+    """Diz se uma exceção de download merece nova tentativa.
+
+    Só erros transitórios repetem: timeout do Playwright, falhas de rede
+    (net::*) e timeouts genéricos. URL inválida, HTTP 4xx e conteúdo
+    inesperado são permanentes: retentá-los só trava a execução
+    (log real: "APIRequestContext.get: Invalid URL. Tentativa 1/3...").
+    """
+    if isinstance(exc, (PlaywrightTimeoutError, TimeoutError)):
+        return True
+    message = str(exc)
+    return "net::" in message or "timeout" in message.lower()
 SEARCH_RESULT_DELAY_MS = 1000
 
 STATE_DIR = Path(".state")
@@ -60,6 +91,17 @@ def _unidade_matches(candidate: str, wanted: str) -> bool:
     if not candidate or not wanted:
         return False
     return candidate == wanted or candidate in wanted or wanted in candidate
+
+
+def _is_process_number(value: str) -> bool:
+    """Diz se o valor parece um número de processo SEI (NNNNN.NNNNNN/YYYY-NN).
+
+    Linhas de documento da busca têm `data-prot` = número do documento
+    (ex.: 64534686), que não casa com o formato de processo; usamos isso
+    para preferir o número real de processo quando navegamos o mesmo link.
+    """
+    return bool(re.fullmatch(r"\d{4,5}\.\d{6,8}/\d{4}-\d{2}",
+                             normalize_process_number(value)))
 
 
 @dataclass(slots=True)
@@ -146,6 +188,38 @@ def _store_download(
     digest = calculate_sha256(final_path)
 
     return final_path, digest, content_type
+
+
+def _save_download(
+    download,
+    directory: Path,
+    filename: str,
+) -> tuple[Path, str, str]:
+    """Salva um objeto Download do Playwright (evento download do modal).
+
+    Verifica download.failure(), grava o arquivo recebido em .part e
+    delega a validação/promoção a ``_store_download``.
+
+    Retorno: caminho_local, sha256, content_type.
+    """
+    failure = download.failure()
+
+    if failure is not None:
+        raise RuntimeError(f"Falha no download do arquivo: {failure}")
+
+    temporary_path = directory / ("." + filename + ".part")
+
+    download.save_as(temporary_path)
+
+    body = temporary_path.read_bytes()
+
+    return _store_download(
+        directory,
+        filename,
+        temporary_path,
+        body,
+        PDF_CONTENT_TYPE,
+    )
 
 
 class SeiClient:
@@ -330,6 +404,7 @@ class SeiClient:
             raise RuntimeError("Formulário #seiSearch não encontrado.")
 
         candidates = [
+            form.locator("#sbmPesquisar"),
             form.get_by_role("button", name=re.compile(r"Pesquisar", re.IGNORECASE)),
             form.get_by_role("button", name=re.compile(r"Pesquisa", re.IGNORECASE)),
             form.locator('input[type="submit"]'),
@@ -355,6 +430,21 @@ class SeiClient:
 
         logger.info("Executando a pesquisa...")
 
+        # Clique real no botão "Pesquisar" (#sbmPesquisar): é o mesmo
+        # mecanismo de um usuário e faz o SEI executar o fluxo oficial
+        # (OnSubmitForm -> CaptchaSEI::validarOnSubmit ->
+        # carregarProximaPagina). requestSubmit() fica só como fallback
+        # caso o botão não seja localizado.
+        submitter = self.find_search_submit()
+        if submitter is not None:
+            try:
+                submitter.click()
+                return
+            except Exception as exc:
+                logger.warning(
+                    "Clique no botão de pesquisa falhou: %s", exc,
+                )
+
         try:
             self.page.evaluate(
                 """
@@ -375,6 +465,39 @@ class SeiClient:
                 "Não foi possível submeter o formulário "
                 f"da Pesquisa Pública: {exc}"
             ) from exc
+
+    def _ensure_checked(self, name: str) -> None:
+        """Marca checkbox do SEI via DOM (evento change).
+
+        O <label class="infraCheckboxLabel"> do SEI intercepta o clique
+        do Playwright .check(), que fica em retry até timeout (log real
+        com chkSinDocumentosGerados, 90s). Setar `checked` e disparar o
+        evento `change` via JS reproduz o efeito do clique sem depender
+        de ponteiro — mesmo padrão usado para #hdnIdUnidade.
+        """
+        try:
+            found = self.page.evaluate(
+                """(name) => {
+                    const el = document.getElementById(name)
+                        || document.querySelector(
+                            "input[name='" + name + "']"
+                        );
+                    if (!el) {
+                        return false;
+                    }
+                    el.checked = true;
+                    el.dispatchEvent(
+                        new Event('change', { bubbles: true })
+                    );
+                    return true;
+                }""",
+                name,
+            )
+        except Exception as exc:
+            logger.warning("Não foi possível marcar %s: %s", name, exc)
+            return
+        if not found:
+            logger.warning("Campo %s não encontrado.", name)
 
     def _set_search_criteria(self, orgao: str, unidade: str,
                              inicio: str, fim: str) -> None:
@@ -419,9 +542,10 @@ class SeiClient:
 
         # Unidade Geradora: campo texto visível + id oculto #hdnIdUnidade.
         # Sem o id oculto o SEI não restringe por unidade (spike:47-48,111),
-        # então resolvemos defensivamente: POST determinístico ao endpoint
-        # de autocomplete (spike:35-45) e, se não casar, fallback clicando
-        # no dropdown. Se nada resolver, degradamos sem raise (aviso +
+        # e o widget só grava o id ao clicar numa opção do dropdown —
+        # então digitamos o rótulo e clicamos na 1ª opção (rota primária).
+        # Fallback: POST determinístico ao endpoint de autocomplete
+        # (spike:35-45). Se nada resolver, degradamos sem raise (aviso +
         # save_debug) e a pesquisa segue só por órgão/período.
         unit = self.page.locator("#txtUnidade")
         if unit.count() == 0:
@@ -429,10 +553,9 @@ class SeiClient:
         if unit.count() == 0:
             logger.warning("Campo de unidade #txtUnidade não encontrado.")
         else:
-            unit.first.fill(unidade)
-            unit_id = self._resolve_unidade_id(unidade, value)
+            unit_id = self._resolve_unidade_dropdown(unidade)
             if not unit_id:
-                unit_id = self._resolve_unidade_dropdown(unidade)
+                unit_id = self._resolve_unidade_id(unidade, value)
             if unit_id:
                 try:
                     self.page.evaluate(
@@ -466,21 +589,11 @@ class SeiClient:
                 )
                 self.save_debug("unidade_sem_resolucao")
 
-        # Marca os três tipos de pesquisa (P, G, R).
+        # Marca os três tipos de pesquisa (P, G, R) via DOM + change:
+        # o label do SEI intercepta o clique do Playwright .check().
         for name in ("chkSinProcessos", "chkSinDocumentosGerados",
                      "chkSinDocumentosRecebidos"):
-            cb = self.page.locator(f"#{name}")
-            if cb.count() == 0:
-                cb = self.page.locator(f'input[name="{name}"]')
-            if cb.count() and not cb.first.is_checked():
-                try:
-                    cb.first.check()
-                except Exception as exc:
-                    logger.warning(
-                        "Não foi possível marcar %s: %s",
-                        name,
-                        exc,
-                    )
+            self._ensure_checked(name)
 
         # Datas no formato DD/MM/YYYY.
         for field, field_value in (("#txtDataInicio", inicio),
@@ -546,10 +659,28 @@ class SeiClient:
         return ProcessResult(number=number, url=link, title="")
 
     def _add_result(self, results: dict, number: str, data: dict) -> None:
-        """Adiciona resultado ao dicionário de resultados (dedup por número)."""
-        if number in results:
-            return
+        """Adiciona resultado ao dicionário (dedupe pela URL do processo).
+
+        O SEI devolve linhas de documento na mesma pesquisa (Documentos
+        Gerados/Recebidos): uma linha de documento tem `data-prot` = nº do
+        documento e link `md_pesq_processo_exibir.php` para o processo-pai.
+        Duas linhas com a MESMA URL de processo são o mesmo processo (bug
+        real: o mesmo despacho foi baixado 2x). Quando o número tem formato
+        de processo, ele vence o número de documento da coluna.
+        """
         link = self._find_process_link(number, data)
+        if not link:
+            if number in results:
+                return
+            results[number] = self._build_process_result(number, "")
+            return
+        for existing in list(results.values()):
+            if existing.url != link:
+                continue
+            if _is_process_number(number) and not _is_process_number(existing.number):
+                del results[existing.number]
+                results[number] = self._build_process_result(number, link)
+            return
         results[number] = self._build_process_result(number, link)
 
     def _parse_autocomplete_html(self, html: str) -> list[tuple[str, str]]:
@@ -641,7 +772,7 @@ class SeiClient:
 
         try:
             response = self.context.request.post(
-                url, params=params, data=data, fail_on_status_code=False,
+                url, params=params, form=data, fail_on_status_code=False,
             )
         except Exception as exc:
             logger.warning(
@@ -669,52 +800,51 @@ class SeiClient:
         return None
 
     def _resolve_unidade_dropdown(self, unidade: str) -> Optional[str]:
-        """Fallback: abre o dropdown do autocomplete e clica no item.
+        """Seleciona a unidade clicando na 1ª opção do autocomplete.
 
-        Rota secundária — usada só se o POST determinístico não resolveu.
-        Dispara eventos no #txtUnidade para o infraAjaxAutoCompletar
-        abrir o menu jQuery-UI, clica no item que casa com o rótulo e lê
-        o id preenchido em #hdnIdUnidade.
+        O widget infraAjaxAutoCompletar só grava #hdnIdUnidade quando
+        uma opção do dropdown é clicada (spike:32-48; confirmado ao
+        vivo): digitamos o rótulo no #txtUnidade com eventos reais de
+        teclado (press_sequentially) e clicamos na primeira opção
+        listada — é o JS do SEI que preenche o id oculto.
         """
-        try:
-            self.page.evaluate(
-                """() => {
-                    const el = document.getElementById('txtUnidade');
-                    if (el) {
-                        el.dispatchEvent(new Event('keyup', { bubbles: true }));
-                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                    }
-                }"""
-            )
-            self.page.wait_for_timeout(400)
-
-            menu = self.page.locator("ul.ui-autocomplete li, .ui-menu-item")
-            count = menu.count()
-            if count == 0:
-                return None
-
-            wanted = _normalize_unidade_label(unidade)
-            for index in range(count):
-                item = menu.nth(index)
-                label = _normalize_unidade_label(item.text_content() or "")
-                if _unidade_matches(label, wanted):
-                    item.click()
-                    break
-
-            return self.page.evaluate(
-                "() => (document.getElementById('hdnIdUnidade') || {}).value || ''"
-            )
-        except Exception as exc:
-            logger.warning("Fallback de unidade por dropdown falhou: %s", exc)
+        field = self.page.locator("#txtUnidade")
+        if field.count() == 0:
+            field = self.page.locator('input[name="txtUnidade"]')
+        if field.count() == 0:
             return None
+
+        try:
+            field.first.click()
+            field.first.press_sequentially(unidade, delay=50)
+
+            menu = self.page.locator(
+                "#divInfraAjaxtxtUnidade li, .infraAjaxAutoCompletar li, "
+                "ul.ui-autocomplete li, .ui-menu-item"
+            )
+            menu.first.wait_for(state="visible", timeout=5_000)
+            if menu.count() > 0:
+                menu.first.click()
+        except Exception as exc:
+            logger.warning("Autocomplete de unidade falhou: %s", exc)
+            return None
+
+        return self.page.evaluate(
+            "() => (document.getElementById('hdnIdUnidade') || {}).value || ''"
+        )
 
     def search_processes(self, orgao: str, unidade: str,
                          inicio: str, fim: str, page_size: int = 50) -> list[ProcessResult]:
         """Pesquisa processos por órgão/unidade/período e pagina os resultados."""
         self.open_search_page()
+
+        # Segue o coletor (main.py:3590-3621): o CAPTCHA é resolvido antes
+        # de qualquer requisição de pesquisa ao SEI, inclusive o POST de
+        # autocomplete de unidade feito dentro de _set_search_criteria.
+        self.solve_search_captcha()
+
         self._set_search_criteria(orgao, unidade, inicio, fim)
         results: dict[str, ProcessResult] = {}
-        self.solve_search_captcha()
 
         try:
             with self.page.expect_response(
@@ -794,7 +924,27 @@ class SeiClient:
 
         self.page.wait_for_timeout(1000)
 
-        return self.page.content()
+        current_url = self.page.url
+        if "md_pesq_processo_exibir.php" not in current_url:
+            # O navegador não carregou a página do processo (ex.: redirecionou
+            # de volta para a pesquisa). Sem o link público correto, a árvore
+            # vira ruído e o download da URL vazia falharia (Invalid URL).
+            self.save_debug("pagina_processo_nao_aberta")
+            logger.warning(
+                "A página do processo não carregou (URL atual: %s).",
+                current_url,
+            )
+
+        html = self.page.content()
+
+        # Número canônico: a descoberta pode ter vindo de uma linha de
+        # documento (data-prot = nº do documento). O cabeçalho da página do
+        # processo (Processo:) é a fonte autoritativa para pasta e linha.
+        canonical = extract_process_number(html)
+        if canonical:
+            process.number = canonical
+
+        return html
 
     def extract_documents(self, process_html: str, process_url: str) -> list[PublicDocument]:
         """Extrai documentos públicos da página do processo."""
@@ -833,6 +983,12 @@ class SeiClient:
         Retorno: caminho_local, sha256, content_type.
         """
         logger.info("Baixando documento: %s", document.name)
+
+        parsed = urlparse(document.url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise RuntimeError(
+                f"URL inválida para download: {document.url!r}"
+            )
 
         self.rate_limiter.wait()
 
@@ -929,6 +1085,11 @@ class SeiClient:
                 )
 
             except Exception as exc:
+                # Erros permanentes (URL inválida, HTTP 4xx, conteúdo
+                # inesperado) não ganham retry: repetir é inútil e trava.
+                if not _is_transient_download_exception(exc):
+                    raise
+
                 last_error = exc
 
                 if attempt >= MAX_RETRIES:
@@ -952,6 +1113,319 @@ class SeiClient:
             "Não foi possível baixar o documento "
             f"após {MAX_RETRIES} tentativas."
         ) from last_error
+
+    _DESPACHO_ROW_JS = """
+        () => {
+            const anchors = Array.from(document.querySelectorAll(
+                "#tblDocumentos a[onclick*='md_pesq_documento_consulta_externa.php']"
+            ));
+            const hits = anchors.filter((a) =>
+                (a.title || a.getAttribute('alt') || a.textContent || '')
+                    .toLowerCase().indexOf('despacho') !== -1
+            );
+            const target = hits[hits.length - 1];
+            if (!target) {
+                return null;
+            }
+            return {
+                title: target.title || target.getAttribute('alt') || '',
+                numero: target.textContent.trim(),
+                onclick: target.getAttribute('onclick') || '',
+            };
+        }
+    """
+
+    # Marca APENAS o checkbox do despacho alvo (#tblDocumentos) e garante que
+    # hdnInfraItensSelecionados fique com o valor dele — condição exigida por
+    # gerarPdfModal()/gerarPdf() para abrir o modal e gerar o PDF.
+    _DESPACHO_MARK_JS = """
+        (numero) => {
+            const box = document.querySelector(
+                '#tblDocumentos input[type="checkbox"][value="' + numero + '"]'
+            );
+            if (!box) {
+                return { status: 'missing' };
+            }
+            if (!box.checked) {
+                box.click();
+            }
+            const hidden = document.getElementById('hdnInfraItensSelecionados');
+            if (hidden) {
+                hidden.value = numero;
+            }
+            return {
+                status: 'ok',
+                checked: box.checked,
+                selected: hidden ? hidden.value : '',
+            };
+        }
+    """
+
+    # Clica no botão principal "Gerar PDF" da tela de detalhes do processo
+    # (name=btnGerarPdfModal, onclick=gerarPdfModal()).
+    _GENERATE_CLICK_JS = """
+        () => {
+            const botoes = document.getElementsByName('btnGerarPdfModal');
+            if (botoes.length === 0) {
+                return false;
+            }
+            botoes[0].click();
+            return true;
+        }
+    """
+
+    def download_despacho(
+        self,
+        process_number: str,
+        numero: str,
+        serie: str,
+    ) -> Optional[tuple[Path, str, str]]:
+        """Baixa o despacho pelo modal "Gerar PDF" da página do processo.
+
+        A página do processo lista os documentos numa tabela (`#tblDocumentos`)
+        e oferece o botão "Gerar PDF" (name=btnGerarPdfModal) que abre o modal
+        `#divInfraModal` exigindo CAPTCHA. O GET direto à URL individual de
+        consulta (`md_pesq_documento_consulta_externa.php?TOKEN`) devolve HTML
+        (página que exige o próprio CAPTCHA), por isso o fluxo validado é:
+        marcar apenas o checkbox do despacho alvo, clicar "Gerar PDF", resolver
+        o CAPTCHA e capturar o download disparado pelo próprio navegador.
+
+        Retorna None quando o despacho não tem link público na tabela (é
+        restrito ou a tabela não expôs o Despacho): quem chamou deve tratá-lo
+        como "Sem despacho público". Erros reais de download levantam
+        RuntimeError.
+        """
+        logger.info(
+            "Baixando despacho %s (último Despacho em #tblDocumentos)...",
+            numero,
+        )
+
+        # 1. Aguarda a tabela de documentos montar.
+        try:
+            self.page.wait_for_selector(
+                "#tblDocumentos",
+                timeout=DESPACHO_TREE_TIMEOUT_MS,
+            )
+        except PlaywrightTimeoutError:
+            self.save_debug("despacho_sem_tabela")
+            logger.warning(
+                "Sem tabela de documentos para o despacho %s.", numero,
+            )
+            return None
+
+        # 2. Localiza o último Despacho na tabela.
+        selected = self.page.evaluate(self._DESPACHO_ROW_JS)
+
+        if not selected:
+            self.save_debug("despacho_sem_link_publico")
+            logger.warning(
+                "Nenhum Despacho encontrado em #tblDocumentos (%s).", numero,
+            )
+            return None
+
+        # 3. Marca APENAS o checkbox do despacho alvo no form
+        #    frmProcessoAcessoExternoConsulta (hdnInfraItensSelecionados).
+        marked = self.page.evaluate(self._DESPACHO_MARK_JS, numero)
+
+        if not marked or marked.get("status") != "ok":
+            self.save_debug("despacho_marcacao_falhou")
+            logger.warning(
+                "Não foi possível marcar o Despacho %s para geração de PDF.",
+                numero,
+            )
+            return None
+
+        # 4. Fluxo do modal: clica "Gerar PDF", resolve o CAPTCHA e captura
+        #    o download. Repetimos quando o SEI rejeita o CAPTCHA.
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, PDF_ATTEMPTS + 1):
+            logger.info(
+                "Tentativa %d/%d de gerar o PDF do despacho %s.",
+                attempt,
+                PDF_ATTEMPTS,
+                numero,
+            )
+
+            try:
+                download = self._generate_despacho_pdf(numero)
+
+                directory = _process_directory(process_number)
+
+                extension = ".pdf"
+                clean_name = safe_filename(serie)
+
+                filename = f"{numero}_{clean_name}{extension}"
+
+                return _save_download(download, directory, filename)
+
+            except (PlaywrightTimeoutError, RuntimeError) as exc:
+                last_error = exc
+
+                if attempt >= PDF_ATTEMPTS:
+                    break
+
+                logger.warning(
+                    "Tentativa %d/%d de gerar o PDF do despacho %s "
+                    "falhou: %s",
+                    attempt,
+                    PDF_ATTEMPTS,
+                    numero,
+                    exc,
+                )
+
+                self._close_pdf_modal()
+
+        raise RuntimeError(
+            "Não foi possível gerar o PDF do despacho "
+            f"{numero} após {PDF_ATTEMPTS} tentativas."
+        ) from last_error
+
+    def _generate_despacho_pdf(self, numero: str):
+        """Abre o modal "Gerar PDF", resolve o CAPTCHA e captura o download.
+
+        Retorno: objeto Download do Playwright (já disparado).
+        """
+        # Closure que fecha o modal da pesquisa ainda aberto (a página do
+        # processo carrega com o modal de CAPTCHA bloqueando a interação).
+        self._close_pdf_modal()
+
+        # 1. Clica no botão principal "Gerar PDF" da tela de detalhes.
+        try:
+            self.page.evaluate(self._GENERATE_CLICK_JS)
+        except Exception as exc:
+            self.save_debug("gerar_pdf_clique_principal_falhou")
+            raise RuntimeError(
+                f"Falha ao clicar no botão 'Gerar PDF' principal: {exc}"
+            ) from exc
+
+        # 2. Aguarda o modal abrir e o campo de CAPTCHA ficar visível.
+        self.page.wait_for_timeout(1000)
+
+        try:
+            self.page.wait_for_selector(
+                "#txtInfraCaptcha",
+                state="visible",
+                timeout=PDF_CAPTCHA_TIMEOUT_MS,
+            )
+        except PlaywrightTimeoutError:
+            self.save_debug("gerar_pdf_modal_nao_abriu")
+            raise RuntimeError(
+                "Modal de geração de PDF não abriu ou não "
+                "possui o campo de CAPTCHA."
+            )
+
+        # 3. Resolve o CAPTCHA (OCR ou manual).
+        if getattr(self, "use_manual_captcha", False):
+            self.wait_for_manual_captcha()
+        else:
+            solver = CaptchaSolver(max_retries=3)
+            solver.solve_captcha_in_page(self.page, "#imgCaptcha")
+
+        # 4. Clica em "Gerar PDF" no modal e captura o download. O SEI inicia
+        #    o download de forma assíncrona; se o CAPTCHA estiver errado exibe
+        #    mensagem em #divInfraMensagens e não baixa nada.
+        modal_gerar_pdf = self.page.locator(
+            "#btnEnviarCaptcha",
+        )
+
+        if modal_gerar_pdf.count() != 1:
+            self.save_debug("gerar_pdf_botao_modal_ambiguo")
+            raise RuntimeError(
+                "Botão 'Gerar PDF' do modal não encontrado ou ambíguo."
+            )
+
+        downloads: list = []
+
+        def _on_download(download):
+            downloads.append(download)
+
+        self.page.on("download", _on_download)
+
+        try:
+            modal_gerar_pdf.click()
+
+            deadline = time.monotonic() + PDF_DOWNLOAD_TIMEOUT_MS / 1000.0
+
+            while not downloads:
+                if time.monotonic() >= deadline:
+                    raise PlaywrightTimeoutError(
+                        "Download não iniciou após clicar "
+                        "em 'Gerar PDF' no modal."
+                    )
+
+                if self._captcha_validation_error():
+                    raise RuntimeError(
+                        "O SEI rejeitou o CAPTCHA do modal "
+                        "(mensagem em #divInfraMensagens)."
+                    )
+
+                self.page.wait_for_timeout(PDF_CAPTCHA_POLL_INTERVAL_MS)
+
+        finally:
+            self.page.remove_listener("download", _on_download)
+
+        return downloads[0]
+
+    def _close_pdf_modal(self) -> None:
+        """Fecha o modal do SEI (#divInfraModal), se estiver visível.
+
+        O fechamento é feito pela imagem com onclick="fecharPdfModal()".
+        Usado antes do fluxo (modal da pesquisa ainda aberto) e entre
+        tentativas de geração do PDF.
+        """
+        try:
+            modal_pesquisa = self.page.locator("#divInfraModal")
+
+            if modal_pesquisa.count() > 0 and modal_pesquisa.is_visible():
+                fechar = self.page.locator(
+                    'img[onclick*="fecharPdfModal"]'
+                )
+
+                if fechar.count() > 0:
+                    fechar.click()
+                    self.page.wait_for_timeout(500)
+        except Exception:
+            # Ignora erros ao tentar fechar modal.
+            pass
+
+    def _captcha_validation_error(self) -> bool:
+        """Verifica se o SEI exibiu mensagem de CAPTCHA inválido.
+
+        O contêiner usado é #divInfraMensagens, no fluxo do modal de PDF.
+        """
+        mensagem = self.page.locator("#divInfraMensagens")
+
+        if mensagem.count() == 0:
+            return False
+
+        try:
+            if not mensagem.is_visible():
+                return False
+
+            texto = mensagem.inner_text()
+        except PlaywrightTimeoutError:
+            return False
+
+        normalizado = re.sub(r"\s+", " ", texto).strip().lower()
+
+        return (
+            any(
+                palavra_chave in normalizado
+                for palavra_chave in (
+                    "captcha",
+                    "confirma",
+                )
+            )
+            and any(
+                sinal in normalizado
+                for sinal in (
+                    "inválid",
+                    "incorret",
+                    "confere",
+                )
+            )
+        )
 
     def ensure_orgaos_selected(self) -> None:
         """Garante que órgãos estão selecionados (todos, via multipleSelect)."""
@@ -1016,19 +1490,4 @@ class SeiClient:
 
     def ensure_process_checkbox(self) -> None:
         """Garante que checkbox de processo está marcado."""
-        checkbox = self.page.locator("#chkSinProcessos")
-
-        if checkbox.count() == 0:
-            checkbox = self.page.locator('input[name="chkSinProcessos"]')
-
-        if checkbox.count() == 0:
-            logger.warning("Checkbox chkSinProcessos não encontrado.")
-            return
-
-        checkbox = checkbox.first
-
-        try:
-            if not checkbox.is_checked():
-                checkbox.check()
-        except Exception as exc:
-            logger.warning("Não foi possível marcar Processos: %s", exc)
+        self._ensure_checked("chkSinProcessos")
