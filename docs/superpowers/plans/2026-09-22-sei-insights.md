@@ -1290,7 +1290,7 @@ git commit -m "feat: planilha xlsx com abas espelho, novos e resumo"
     - NEW `search_processes(orgao: str, unidade: str, inicio: str, fim: str, page_size: int = 50) -> list[ProcessResult]`:
       opens the search page, selects organ/unit per the spike's selector strategy (Task 1), marks **all three** search-type checkboxes, fills the date fields, installs the AJAX listener, submits, parses the JSON via `discovery`, then paginates through the remaining pages via `context.request` POST to the AJAX endpoint using `pagination_params`, following `expected_total`; returns unique `ProcessResult`s in order.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_sei_client.py` — pure parsing/matching tests that run without a browser (mirrors the collector's `FakePage`/`FakeLocator` approach):
 
@@ -1348,12 +1348,12 @@ class ExtractProcessTest(unittest.TestCase):
         self.assertIsNone(extract_process("<html></html>", "21260.003436/2026-15"))
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_sei_client -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'sei_client'`
 
-- [ ] **Step 3: Copy and adapt the implementation**
+- [x] **Step 3: Copy and adapt the implementation**
 
 `sei_client.py` — copy from the collector `main.py` and adapt:
 
@@ -1478,12 +1478,12 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'sei_client'`
 
 > The spike (Task 1) is the authority for `#txtDataInicialPesquisa` field names and the organ/unit selector strategy; if the live names differ, update `_set_search_criteria` accordingly and note it in the spike doc. Keep `ensure_orgaos_selected` as the degradation path, and keep a rate-limit wait before every pagination POST.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_sei_client -v`
 Expected: PASS (5 tests) — the parsing/matching-predicate tests do not require a browser or the live site.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add sei_client.py tests/test_sei_client.py
