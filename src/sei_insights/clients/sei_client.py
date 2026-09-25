@@ -50,6 +50,18 @@ ORGAO_VALUES: dict[str, str] = {
 }
 
 
+def _normalize_unidade_label(value: str) -> str:
+    """Normaliza rótulo de unidade para comparação (minúsculas, sem espaços a mais)."""
+    return " ".join(str(value).split()).casefold()
+
+
+def _unidade_matches(candidate: str, wanted: str) -> bool:
+    """Compara rótulo candidato do autocomplete com o alvo (parcial ok)."""
+    if not candidate or not wanted:
+        return False
+    return candidate == wanted or candidate in wanted or wanted in candidate
+
+
 @dataclass(slots=True)
 class ProcessResult:
     number: str
@@ -405,8 +417,12 @@ class SeiClient:
                 )
                 self.ensure_orgaos_selected()
 
-        # Unidade Geradora: campo texto visível + id oculto resolvido pelo
-        # autocomplete do próprio SEI ao digitar.
+        # Unidade Geradora: campo texto visível + id oculto #hdnIdUnidade.
+        # Sem o id oculto o SEI não restringe por unidade (spike:47-48,111),
+        # então resolvemos defensivamente: POST determinístico ao endpoint
+        # de autocomplete (spike:35-45) e, se não casar, fallback clicando
+        # no dropdown. Se nada resolver, degradamos sem raise (aviso +
+        # save_debug) e a pesquisa segue só por órgão/período.
         unit = self.page.locator("#txtUnidade")
         if unit.count() == 0:
             unit = self.page.locator('input[name="txtUnidade"]')
@@ -414,6 +430,41 @@ class SeiClient:
             logger.warning("Campo de unidade #txtUnidade não encontrado.")
         else:
             unit.first.fill(unidade)
+            unit_id = self._resolve_unidade_id(unidade, value)
+            if not unit_id:
+                unit_id = self._resolve_unidade_dropdown(unidade)
+            if unit_id:
+                try:
+                    self.page.evaluate(
+                        """(unit_id) => {
+                            const el = document.getElementById('hdnIdUnidade');
+                            if (el) {
+                                el.value = String(unit_id);
+                                el.dispatchEvent(
+                                    new Event('change', { bubbles: true })
+                                );
+                            }
+                        }""",
+                        unit_id,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Não foi possível preencher #hdnIdUnidade: %s", exc,
+                    )
+            resolved = self.page.evaluate(
+                "() => (document.getElementById('hdnIdUnidade') || {}).value || ''"
+            )
+            if resolved.strip():
+                logger.info(
+                    "Unidade %r resolvida para id oculto %r.",
+                    unidade, resolved,
+                )
+            else:
+                logger.warning(
+                    "Unidade %r não resolvida; a pesquisa seguirá sem "
+                    "filtro de unidade (apenas órgão/período).", unidade,
+                )
+                self.save_debug("unidade_sem_resolucao")
 
         # Marca os três tipos de pesquisa (P, G, R).
         for name in ("chkSinProcessos", "chkSinDocumentosGerados",
@@ -501,6 +552,162 @@ class SeiClient:
         link = self._find_process_link(number, data)
         results[number] = self._build_process_result(number, link)
 
+    def _parse_autocomplete_html(self, html: str) -> list[tuple[str, str]]:
+        """Extrai (rótulo, id) de um HTML de autocomplete (li/option)."""
+        items: list[tuple[str, str]] = []
+        soup = BeautifulSoup(html or "", "html.parser")
+        for node in soup.select("li, option"):
+            label = node.get_text(" ", strip=True)
+            unit_id = (
+                node.get("value")
+                or node.get("data-value")
+                or node.get("id")
+                or ""
+            ).strip()
+            if label and unit_id:
+                items.append((label, unit_id))
+        return items
+
+    def _parse_autocomplete_items(self, response) -> list[tuple[str, str]]:
+        """Extrai (rótulo, id) da resposta do autocomplete de unidade.
+
+        Aceita JSON (lista de dicts ou `{"html": ...}`) e HTML cru
+        (li/option). Shape exato não é verificável offline — parseamos
+        defensivamente e deixamos o chamador degradar se não casar.
+        """
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+
+        items: list[tuple[str, str]] = []
+
+        if isinstance(payload, list):
+            for row in payload:
+                if not isinstance(row, dict):
+                    continue
+                unit_id = next(
+                    (str(row[k]) for k in (
+                        "id", "id_unidade", "cod_unidade",
+                        "value", "id_unidade_geradora")
+                     if row.get(k) not in (None, "")),
+                    "",
+                )
+                label = next(
+                    (str(row[k]) for k in (
+                        "nome", "nome_unidade", "label", "text", "sigla")
+                     if row.get(k) not in (None, "")),
+                    "",
+                )
+                if unit_id and label:
+                    items.append((label, unit_id))
+        elif isinstance(payload, dict):
+            items = self._parse_autocomplete_html(payload.get("html") or "")
+            if not items:
+                for key, value in payload.items():
+                    if key in ("html", "itens"):
+                        continue
+                    items.append((str(value), str(key)))
+        else:
+            try:
+                items = self._parse_autocomplete_html(response.text())
+            except Exception:
+                items = []
+
+        return items
+
+    def _resolve_unidade_id(self, unidade: str,
+                            orgao_value: Optional[str]) -> Optional[str]:
+        """Resolve o id da unidade via endpoint de autocomplete do SEI.
+
+        Rota preferida, determinística (spike:35-45): POST ao mesmo
+        endpoint usado pelo widget infraAjaxAutoCompletar
+        (`acao_ajax_externo=unidade_auto_completar_todas` com
+        `palavras_pesquisa=<rótulo>` e `id_orgao=<órgão>` quando o órgão
+        foi mapeado). Retorna o primeiro id cujo rótulo casa com a
+        unidade alvo; None se nada casa ou o POST falhar (o chamador
+        tenta o fallback por dropdown e depois degrada).
+        """
+        url = BASE_URL + "modulos/pesquisa/md_pesq_controlador_ajax_externo.php"
+        params = {
+            "acao_ajax_externo": "unidade_auto_completar_todas",
+            "id_orgao_acesso_externo": "7",
+        }
+        data: dict[str, str] = {"palavras_pesquisa": unidade}
+        if orgao_value is not None:
+            data["id_orgao"] = str(orgao_value)
+
+        self.rate_limiter.wait()
+
+        try:
+            response = self.context.request.post(
+                url, params=params, data=data, fail_on_status_code=False,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Falha no POST de autocomplete de unidade: %s", exc,
+            )
+            return None
+
+        try:
+            if response.status >= 400:
+                return None
+            candidates = self._parse_autocomplete_items(response)
+        except Exception as exc:
+            logger.warning("Resposta de autocomplete inválida: %s", exc)
+            return None
+        finally:
+            try:
+                response.dispose()
+            except Exception:
+                pass
+
+        wanted = _normalize_unidade_label(unidade)
+        for label, unit_id in candidates:
+            if _unidade_matches(_normalize_unidade_label(label), wanted):
+                return unit_id
+        return None
+
+    def _resolve_unidade_dropdown(self, unidade: str) -> Optional[str]:
+        """Fallback: abre o dropdown do autocomplete e clica no item.
+
+        Rota secundária — usada só se o POST determinístico não resolveu.
+        Dispara eventos no #txtUnidade para o infraAjaxAutoCompletar
+        abrir o menu jQuery-UI, clica no item que casa com o rótulo e lê
+        o id preenchido em #hdnIdUnidade.
+        """
+        try:
+            self.page.evaluate(
+                """() => {
+                    const el = document.getElementById('txtUnidade');
+                    if (el) {
+                        el.dispatchEvent(new Event('keyup', { bubbles: true }));
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                }"""
+            )
+            self.page.wait_for_timeout(400)
+
+            menu = self.page.locator("ul.ui-autocomplete li, .ui-menu-item")
+            count = menu.count()
+            if count == 0:
+                return None
+
+            wanted = _normalize_unidade_label(unidade)
+            for index in range(count):
+                item = menu.nth(index)
+                label = _normalize_unidade_label(item.text_content() or "")
+                if _unidade_matches(label, wanted):
+                    item.click()
+                    break
+
+            return self.page.evaluate(
+                "() => (document.getElementById('hdnIdUnidade') || {}).value || ''"
+            )
+        except Exception as exc:
+            logger.warning("Fallback de unidade por dropdown falhou: %s", exc)
+            return None
+
     def search_processes(self, orgao: str, unidade: str,
                          inicio: str, fim: str, page_size: int = 50) -> list[ProcessResult]:
         """Pesquisa processos por órgão/unidade/período e pagina os resultados."""
@@ -550,16 +757,25 @@ class SeiClient:
         for number in page_numbers:
             self._add_result(results, number, data)
 
-        total = expected_total(data)
         page = page_size
 
-        while len(results) < max(total, len(page_numbers)) and page_numbers:
+        # Contrato real do SEI (spike:100,126,212): a resposta AJAX traz
+        # apenas {"html": ...}, sem campo itens, então expected_total é 0.
+        # Paginamos enquanto a última página devolveu uma página cheia;
+        # paramos na primeira página curta ou vazia. expected_total serve
+        # só como limite adicional quando itens existe e o safety valve
+        # evita paginação infinita.
+        while len(page_numbers) == page_size:
+            self.solve_search_captcha()
             page_data = self._fetch_page(page, page_size)
             page_numbers = parse_response(page_data)
             if not page_numbers:
                 break
             for number in page_numbers:
                 self._add_result(results, number, page_data)
+            total_known = expected_total(page_data)
+            if total_known and len(results) >= total_known:
+                break
             page += page_size
             if page > page_size * 50:  # safety valve
                 break
