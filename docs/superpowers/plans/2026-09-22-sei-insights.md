@@ -44,7 +44,7 @@ Inputs the spec implies but no single task's happy path exercises; each gets a p
 - Consumes: the live instance `https://colaboragov.sei.gov.br/` and the already-approved spec §6.
 - Produces: `docs/spike-2026-09-22.md` findings that Tasks 9 and 11 use to pin selectors, JSON shape and pagination behavior.
 
-- [ ] **Step 1: Run one manual discovery on the live site**
+- [x] **Step 1: Run one manual discovery on the live site**
 
 In a Chromium browser (DevTools → Network → Copy as cURL, like the handoff did):
 1. open `https://colaboragov.sei.gov.br/sei/modulos/pesquisa/md_pesq_processo_pesquisar.php?acao_externa=protocolo_pesquisar&acao_origem_externa=protocolo_pesquisar&id_orgao_acesso_externo=7`;
@@ -53,7 +53,7 @@ In a Chromium browser (DevTools → Network → Copy as cURL, like the handoff d
 4. select Órgão `MMulheres` and Unidade `MMULHERES-SE-SGA-CGATI-CTI-DTI`;
 5. set the last 7 days as the period; search.
 
-- [ ] **Step 2: Inspect the AJAX response**
+- [x] **Step 2: Inspect the AJAX response**
 
 From the captured request/response, record in `docs/spike-2026-09-22.md`:
 - the exact selector names/values used to select the organ and the unit (e.g. `#selOrgaoPesquisa`, `#selUnidadePesquisa`, plug-in calls like `multipleSelect('setSelects', [...])`, or an infra tree selector);
@@ -61,15 +61,15 @@ From the captured request/response, record in `docs/spike-2026-09-22.md`:
 - how many processes come back and the shape of one row in `html` (is there a `data-prot` attribute on the row? a link `md_pesq_processo_exibir.php`?);
 - whether the unit filter really narrows the result to the CTI's processes or the server ignores it.
 
-- [ ] **Step 3: Verify pagination and per-page CAPTCHA**
+- [x] **Step 3: Verify pagination and per-page CAPTCHA**
 
 Go to page 2 (click "Próxima") and capture that AJAX call too. Record: the query params (`isPaginacao=true`, `inicio`, `rowsSolr`) and POST body, whether a new CAPTCHA appeared, and when the result ends (an `itens` total vs. reaching fewer than 50 rows).
 
-- [ ] **Step 4: Inspect a public process page tree**
+- [x] **Step 4: Inspect a public process page tree**
 
 Open one returned process. Record in the spike doc: the DOM shape of the document-tree rows (does each row expose the serie name, the document number, a date, and the `md_pesq_documento_consulta_externa.php` link?), whether the link label contains the document number (needed for node→URL correlation), and the exact text format to parse.
 
-- [ ] **Step 5: Commit findings; gate on spec**
+- [x] **Step 5: Commit findings; gate on spec**
 
 ```bash
 python -m pip install --upgrade pip
@@ -97,7 +97,7 @@ If any finding contradicts the spec (e.g. the unit filter is ignored), **stop an
   - `looks_like_html(data: bytes) -> bool`
   - `unique_path(path: pathlib.Path) -> pathlib.Path`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_utils.py`:
 
@@ -174,12 +174,12 @@ class UniquePathTest(unittest.TestCase):
             self.assertEqual(result.suffix, ".pdf")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_utils -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'utils'`
 
-- [ ] **Step 3: Write the scaffolding and the implementation**
+- [x] **Step 3: Write the scaffolding and the implementation**
 
 `requirements.txt`:
 
@@ -215,12 +215,12 @@ __pycache__/
 
 Keep imports `hashlib`, `re`, `time`, `logging` local to the module. The exact bodies live in the collector and must be copied byte-for-byte so behavior matches (normalization keeps digits/letters/dots/slashes/hyphens; `unique_path` appends ` (1)` before the extension).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_utils -v`
 Expected: PASS (all 8 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add requirements.txt .gitignore tests/__init__.py tests/test_utils.py utils.py
@@ -239,7 +239,7 @@ git commit -m "feat: scaffold e utilitários de apoio"
 - Consumes: nothing from this project.
 - Produces: `class RateLimiter(min_delay: float, max_delay: float)` with `wait()` and `wait_seconds(seconds: float)`, used by Tasks 11 and 12.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_rate_limit.py`:
 
@@ -280,21 +280,21 @@ class RateLimiterTest(unittest.TestCase):
             sleep.assert_called_once_with(4.2)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_rate_limit -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'rate_limit'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Copy `RateLimiter` from collector `main.py:647-746` **verbatim** into `rate_limit.py`, renaming only the logger to `logger = logging.getLogger("sei-insights")`. The class uses `random.uniform`, `time.monotonic`, and `time.sleep` directly in module scope (which the tests patch).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_rate_limit -v`
 Expected: PASS (all 4 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rate_limit.py tests/test_rate_limit.py
@@ -313,25 +313,25 @@ git commit -m "feat: rate limiter com pausa aleatória e retry-after"
 - Consumes: `playwright.sync_api.Page`.
 - Produces: `class CaptchaSolver(max_retries: int = 3, ocr_timeout_seconds: int = 10)` with `solve_from_base64(base64_png: str) -> str` and `solve_captcha_in_page(page, captcha_img_selector: str = "#imgCaptcha") -> str`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Copy `tests/test_captcha_solver.py` from the collector **verbatim** and adjust nothing except imports (module already is `captcha_solver`). The collector version defines `FakeLocator`, `FakePage`, and `CaptchaSolverTest`. If `ddddocr` is not installed in the environment, those tests cover the retry/threading logic around `solve_from_base64` — keep `CaptchaSolver.__init__`'s `raise RuntimeError` for missing `ddddocr` and skip tests that require an actual OCR model with `@unittest.skipUnless` on the class when `ddddocr is None`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_captcha_solver -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'captcha_solver'` (or skipped if skipping applies)
 
-- [ ] **Step 3: Copy the implementation**
+- [x] **Step 3: Copy the implementation**
 
 Copy `captcha_solver.py` from the collector **verbatim** (`C:\Users\wermeson.silva\Documents\Projetos\sei-colaboragov\captcha_solver.py`, 146 lines). Change only the logger name to `sei-insights`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_captcha_solver -v`
 Expected: PASS (or SKIPPED where the OCR model is unavailable)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add captcha_solver.py tests/test_captcha_solver.py
@@ -355,7 +355,7 @@ git commit -m "feat: resolvedor de CAPTCHA por OCR (copiado do coletor)"
   - `class MirrorStore(db_path: pathlib.Path)` with `open()`, `close()`, `load_snapshot() -> dict[str, ProcessRow]` (keyed by `numero`), `replace_snapshot(rows: list[ProcessRow]) -> None`.
   - The SQLite table `processes` has **exactly** one column per `ProcessRow` field, primary key `numero`, WAL mode.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_store.py`:
 
@@ -416,12 +416,12 @@ class StoreTest(unittest.TestCase):
                             despacho_hash("12346|15/09/2026"))
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_store -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'store'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `store.py`:
 
@@ -517,12 +517,12 @@ class MirrorStore:
         conn.commit()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_store -v`
 Expected: PASS (3 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add store.py tests/test_store.py
@@ -541,7 +541,7 @@ git commit -m "feat: espelho SQLite idêntico à planilha e hash do despacho"
 - Consumes: nothing from this project.
 - Produces: `def extract_text_from_pdf(path: pathlib.Path) -> str` — returns page texts joined by `\n`, empty string for a PDF with no extractable text, raises the pypdf error on unreadable/corrupt files.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_text_ing.py`:
 
@@ -585,12 +585,12 @@ class TextIngTest(unittest.TestCase):
 
 > If the raw `/Contents` stream fixture proves flaky on the installed pypdf version, replace it with a fixed base64-encoded minimal "Hello World" one-page PDF (a known, stable fixture generated once) and keep both tests. The empty-string behavior is the contract that matters.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_text_ing -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'text_ing'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `text_ing.py`:
 
@@ -610,12 +610,12 @@ def extract_text_from_pdf(path: Path) -> str:
     return "\n".join(parts).strip()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_text_ing -v`
 Expected: PASS (2 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add text_ing.py tests/test_text_ing.py
@@ -638,7 +638,7 @@ git commit -m "feat: extração de texto de PDF via pypdf"
   - `def correlate_urls(nodes: list[DocNode], links: list[tuple[str, str]]) -> list[DocNode]` — sets `node.url` by matching a link label that contains the node's `numero`; fallback: assign URLs to nodes (without a number) in render order.
   - `def select_last_despacho(nodes: list[DocNode]) -> DocNode | None` — greatest date among serie containing "Despacho"; tie/dateless → last in tree order; `None` when no Despacho node exists.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_tree.py`:
 
@@ -711,12 +711,12 @@ class TreeTest(unittest.TestCase):
         self.assertIsNone(select_last_despacho(parse_tree(html)))
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_tree -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'tree'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `tree.py`:
 
@@ -806,12 +806,12 @@ def select_last_despacho(nodes: list[DocNode]) -> Optional[DocNode]:
     return max(despachos, key=lambda n: n.posicao)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_tree -v`
 Expected: PASS (5 tests). If the fixture/selector assumptions differ from the real page (per the spike), adjust the selectors in `parse_tree` and the fixture together, then commit the change with a note.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tree.py tests/test_tree.py

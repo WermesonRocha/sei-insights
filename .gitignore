@@ -1,4 +1,9 @@
-.worktrees
-
-SEI_ColaboraGov_handoff_context.md
-SEI_ColaboraGov_handoff_context.txt
+.state/
+downloads/
+*.xlsx
+__pycache__/
+.venv/
+.playwright-mcp
+*.egg-info/
+build/
+dist/
