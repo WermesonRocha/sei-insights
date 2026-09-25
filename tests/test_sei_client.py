@@ -49,3 +49,37 @@ class ExtractProcessTest(unittest.TestCase):
 
     def test_nao_acha_nada(self):
         self.assertIsNone(extract_process("<html></html>", "21260.003436/2026-15"))
+
+
+class BridgeTest(unittest.TestCase):
+    """Testes herméticos da ponte resultado->link (sem navegador)."""
+
+    def setUp(self):
+        self.client = SeiClient(None, None, None)
+
+    def test_find_process_link_resolve_para_url_absoluta(self):
+        data = {
+            "html": ("<div><tr data-prot='21260.003436/2026-15'>"
+                     "<td><a href='md_pesq_processo_exibir.php?id=9'>Título</a></td>"
+                     "</tr></div>")
+        }
+        link = self.client._find_process_link("21260.003436/2026-15", data)
+        self.assertTrue(link.startswith("https://"))
+        self.assertTrue(link.endswith("md_pesq_processo_exibir.php?id=9"))
+
+    def test_find_process_link_sem_resultado(self):
+        self.assertEqual(self.client._find_process_link("21260.003436/2026-15", {"html": ""}), "")
+
+    def test_add_result_deduplica_por_numero(self):
+        data = {
+            "html": ("<div><tr data-prot='21260.003436/2026-15'>"
+                     "<td><a href='md_pesq_processo_exibir.php?id=9'>Título</a></td>"
+                     "</tr></div>")
+        }
+        results: dict = {}
+        self.client._add_result(results, "21260.003436/2026-15", data)
+        self.client._add_result(results, "21260.003436/2026-15", data)
+        self.assertEqual(len(results), 1)
+        result = results["21260.003436/2026-15"]
+        self.assertEqual(result.number, "21260.003436/2026-15")
+        self.assertTrue(result.url.endswith("md_pesq_processo_exibir.php?id=9"))
