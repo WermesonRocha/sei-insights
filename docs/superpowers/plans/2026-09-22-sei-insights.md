@@ -1505,7 +1505,7 @@ git commit -m "feat: cliente SEI com descoberta por unidade/período e paginaç�
   - `def now_str() -> str` — local time `"YYYY-MM-DD HH:MM:SS"`.
   - `def main() -> int`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_main.py`:
 
@@ -1603,12 +1603,12 @@ class NowStrTest(unittest.TestCase):
         self.assertRegex(now_str(), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_main -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'main'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `main.py` (core orchestration; browser glue is thin):
 
@@ -1736,17 +1736,17 @@ if __name__ == "__main__":
 
 `README.md` — concise usage doc: purpose, install, `python main.py` with the flags from Global Constraints, a note that CAPTCHA is OCR or `--manual-captcha`, and that the spreadsheet is the source of truth (SQLite mirrors it).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_main -v`
 Expected: PASS (7 tests)
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `python -m unittest discover -s tests -v`
 Expected: all project tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add main.py tests/test_main.py README.md
