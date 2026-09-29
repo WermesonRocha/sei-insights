@@ -16,7 +16,7 @@ A cada execução o programa:
    `regras.json`) e classifica a **situação atual** e a **pendência**
    (o que falta / quem está com o processo);
 5. grava uma **planilha XLSX** (fonte da verdade) com uma linha por
-   processo, além de abas de Novos e Resumo;
+   processo e uma aba **Resumo da última execução**;
 6. reconstrói o banco **SQLite** como **espelho exato** da planilha.
 
 > **Importante:** o programa **não** burla CAPTCHA, **não** acessa
@@ -97,7 +97,7 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
         → extração do texto (pypdf)
         → motor de regras (regras.json)
         → linha da planilha
-  → grava a planilha XLSX (Aba principal + Novos + Resumo)
+  → grava a planilha XLSX (Aba principal + Resumo da última execução)
   → reconstrói o SQLite como espelho exato da planilha
 ```
 
@@ -183,7 +183,7 @@ copiado do coletor de origem.
 | `src/sei_insights/documents/tree.py`     | Leitura da árvore de documentos, correlação nó → URL, último Despacho. |
 | `src/sei_insights/documents/text_ing.py` | Extração de texto de PDF via `pypdf`.                             |
 | `src/sei_insights/storage/mirror.py`     | Espelho SQLite da planilha (`MirrorStore`).                        |
-| `src/sei_insights/storage/report.py`     | Geração da planilha XLSX (abas principal, Novos, Resumo).         |
+| `src/sei_insights/storage/report.py`     | Geração da planilha XLSX (abas principal e Resumo da última execução). |
 | `src/sei_insights/utils/helpers.py`      | Apoio: normalização de número, SHA-256, MIME, nomes seguros.      |
 | `requirements.txt`                       | Dependências Python do projeto (fonte única).                     |
 | `tests/`                                 | Testes automatizados (`unittest`).                                 |
@@ -428,24 +428,23 @@ No `INFO` (padrão), o terminal mostra:
 
 ### Planilha XLSX
 
-Arquivo `sei_insights.xlsx` (ou o caminho de `--saida`) com **três abas**:
+Arquivo `sei_insights.xlsx` (ou o caminho de `--saida`) com **duas abas**:
 
 - **Aba principal** — espelho do estado atual: **uma linha por processo**
   com as colunas abaixo;
-- **Novos** — processos que **nunca** foram vistos no espelho anterior
-  (não casaram nem por número nem por URL; mesma estrutura da aba
-  principal);
-- **Resumo** — contagens: `total`, `novos`, `por_situacao` e
-  `por_status` (cada `métrica | valor` em uma linha).
+- **Resumo da última execução** — quando a execução rodou e contagens,
+  em blocos: **Data e hora da execução** e **Período pesquisado**
+  (início a fim, no formato `DD/MM/AAAA a DD/MM/AAAA`), **Visão geral**
+  (`Total de processos`, `Novos`), tabela **Por situação** e tabela
+  **Por status** (`Classificação | Quantidade`).
 
 ### As colunas da planilha
 
-Cada linha da aba principal (e da aba Novos) corresponde a **um processo**:
+Cada linha da aba principal corresponde a **um processo**:
 
 | Coluna | Explicação |
 | ------ | ---------- |
 | `numero` | Número **canônico** do processo (`NNNNN.NNNNNN/AAAA-NN`), lido do cabeçalho da página pública (`Processo:`), normalizado. Mesmo quando a busca descobre o processo via uma linha de documento, aqui vale o número do **processo** — nunca o número do documento. É a chave primária no espelho SQLite. |
-| `data_execucao` | Data/hora da execução que gravou/atualizou a linha, no **formato brasileiro** (`DD/MM/AAAA HH:MM:SS`, ex.: `29/09/2026 16:29:44`). |
 | `data_ultimo_despacho` | Data do último Despacho da árvore de documentos, lida da coluna **"Data de Inclusão"** da tabela da página pública (`dd/mm/aaaa`; hora:minuto da célula é ignorado). Vazia quando não há despacho público ou a data não foi exibida. |
 | `situacao` | Situação classificada pelo motor de regras a partir do texto do último Despacho (ex.: "Aguardando providências de X"). Valores especiais: `Sem despacho público`, `Texto não extraível (digitalizado?)`, fallback `Em análise` e `Erro / retry`. |
 | `destino` | **Destinatário citado no cabeçalho do despacho** na primeira linha de destinatário (`Ao/Aos/À/Às <nome>`, ignorando cópia `C/c:` e cortando em `Assunto:`/`Referência:`), mantido **por extenso e exato** (sem o `Ao/Aos/À/Às`); vira **sigla** só quando o **nome inteiro** equivaler a uma chave do mapa `siglas` do `regras.json` (normalização de acentos/hífens) ou quando citado como `(SIGLA)`/após travessão — ex.: `SE`, `CGATI`, `COSIS`, `SGA` vs `Gabinete da Ministra`. Sem cabeçalho de destinatário, é preenchido pela regra do corpo. Vazia quando não envolve destinatário. |
@@ -455,15 +454,21 @@ Cada linha da aba principal (e da aba Novos) corresponde a **um processo**:
 | `hash_ultimo_despacho` | SHA-256 do identificador `número\|data` do último Despacho. Base do cache: inalterado → análise preservada; mudou → reanálise e novo download. É hash do **identificador**, não do texto do PDF (intencional). |
 | `link_process` | URL pública do processo (`md_pesq_processo_exibir.php?TOKEN`) — **última coluna**. É a **identidade estável** do processo entre execuções: usada na dedupe da descoberta e como chave alternativa do cache. |
 
-> **Todos os valores das abas principal e Novos são gravados como Texto**
-> (formato `@`). Assim o Excel não tenta interpretar `numero`
+> **Todos os valores das abas são gravados como Texto** (formato `@`).
+> Assim o Excel não tenta interpretar `numero`
 > (`21260.002715/2026-53` tem `.`, `/`, `-`), hashes ou links como número,
-> evitando triângulos de erro e conversões indesejadas. A aba Resumo
-> mantém `total`/`novos` como números reais.
+> evitando triângulos de erro e conversões indesejadas. As quantidades do
+> Resumo da última execução restam números reais.
+
+> **Onde ficou `data_execucao`?** Ela não se repete mais em cada linha da
+> planilha (redundante): a data/hora da execução fica **uma única vez** na
+> aba **Resumo da última execução** (campo **Data e hora da execução**).
+> No espelho SQLite (`.state/sei_insights.sqlite3`) a coluna
+> `data_execucao` **continua em cada linha** — nada mudou no banco.
 
 A planilha é **substituída a cada execução** (espelho do momento). Um
-resultado vazio (0 processos) é válido: a planilha é gerada com as abas
-vazias e o Resumo zerado, sem erro.
+resultado vazio (0 processos) é válido: a planilha é gerada com a aba
+principal vazia e o Resumo zerado, sem erro.
 
 ### `.state/`
 
@@ -644,7 +649,7 @@ muda e o processo é rebaixado e reanalisado na próxima execução.
 > **Nota sobre a janela:** o espelho guarda apenas a última execução.
 > Alternar a janela entre execuções (ex.: `--dias 7` ↔ `--dias 30`) pode
 > sinalizar como "novos" processos já vistos antes — o efeito fica
-> registrado na aba Resumo.
+> registrado na aba Resumo da última execução (bloco **Visão geral**).
 
 ---
 

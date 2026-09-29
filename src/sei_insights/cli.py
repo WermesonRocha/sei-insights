@@ -340,7 +340,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                             "Não foi possível fechar o navegador: %s", exc,
                         )
 
-        write_spreadsheet(Path(args.saida), rows, novos, build_resumo(rows, novos))
+        write_spreadsheet(
+            Path(args.saida), rows,
+            build_resumo(rows, novos, now, f"{inicio} a {fim}"),
+        )
         store.replace_snapshot(rows)
         log_summary(rows, novos, inicio, fim)
         return 0
