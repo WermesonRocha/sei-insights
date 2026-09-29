@@ -16,7 +16,7 @@ A cada execução o programa:
    `regras.json`) e classifica a **situação atual** e a **pendência**
    (o que falta / quem está com o processo);
 5. grava uma **planilha XLSX** (fonte da verdade) com uma linha por
-   processo, além de abas de Novos e Resumo;
+   processo e uma aba **Resumo da última execução**;
 6. reconstrói o banco **SQLite** como **espelho exato** da planilha.
 
 > **Importante:** o programa **não** burla CAPTCHA, **não** acessa
@@ -85,7 +85,9 @@ O fluxo de execução é o seguinte:
 
 ```
 busca por unidade + período (+ 3 tipos de pesquisa marcados)
-  → lista de números de processos públicos (deduplicada)
+  → linhas de resultado (processos E documentos — 1 linha por documento)
+  → dedupe pela URL do processo → 1 resultado por processo
+  → número canônico do processo (cabeçalho "Processo:" da página pública)
   → diff com o espelho anterior (SQLite) → "novos"
   → para cada processo:
         página pública
@@ -95,7 +97,7 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
         → extração do texto (pypdf)
         → motor de regras (regras.json)
         → linha da planilha
-  → grava a planilha XLSX (Aba principal + Novos + Resumo)
+  → grava a planilha XLSX (Aba principal + Resumo da última execução)
   → reconstrói o SQLite como espelho exato da planilha
 ```
 
@@ -103,8 +105,18 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    é preenchida com Órgão (`MMulheres`), Unidade
    (`MMULHERES-SE-SGA-CGATI-CTI-DTI`), período e as três opções
    "Pesquisar em" (Processos, Documentos Gerados, Documentos Externos).
-   A resposta AJAX (POST com paginação `isPaginacao`) é observada e os
-   números de processo são extraídos e **deduplicados**.
+   A resposta AJAX (POST com paginação `isPaginacao`) é observada e as
+   linhas de resultado são extraídas.
+
+   Como os três tipos de pesquisa estão marcados, o SEI devolve **uma
+   linha por item que casar**: processos **e** documentos. Uma linha de
+   documento carrega o `data-prot` = número do **documento** e um link
+   (`md_pesq_processo_exibir.php`) para o **processo-pai** — ou seja, o
+   mesmo processo pode aparecer várias vezes na busca (uma vez por
+   documento seu). A **dedupe é feita pela URL do processo**, não pelo
+   número: todas as linhas que apontam para a mesma página de processo
+   colapsam em um único resultado. Sem isso, um processo descoberto por
+   N documentos era visitado e baixado N vezes (bug real).
 
 2. **Paginação**: o módulo devolve até 50 resultados por página
    (`rowsSolr=50`). Páginas seguintes avançam o parâmetro `inicio`; como
@@ -112,14 +124,20 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
 
 3. **Navegação ao processo** (`sei_client.py`): segue o link público
    `md_pesq_processo_exibir.php` fornecido pelo próprio resultado da
-   pesquisa — nenhum link é fabricado.
+   pesquisa — nenhum link é fabricado. Ao abrir a página, o programa lê o
+   cabeçalho (`#tblCabecalho`, linha **`Processo:`**) e usa esse número
+   como o **número canônico** do processo — pasta da planilha e da
+   `downloads/`. Assim, mesmo quando o processo foi descoberto por uma
+   linha de documento (que só tem o número do documento), a linha da
+   planilha e a pasta usam o número real do processo.
 
 4. **Árvore de documentos** (`tree.py`): a página pública monta a árvore
    via JavaScript. Para cada documento são lidos a **série documental**
-   (ex.: "Despacho"), o **número documental** (5+ dígitos), a **data**
-   (dd/mm/aaaa, quando presente) e a **posição** na árvore. O nó é
-   correlacionado à URL pública pelo **número documental** (fallback:
-   ordem de renderização).
+   (ex.: "Despacho"), o **número documental** (5+ dígitos), a **data de
+   inclusão** (coluna "Data de Inclusão" da tabela, `dd/mm/aaaa` — a
+   hora:minuto da célula é ignorada; fallback: data no rótulo do nó) e a
+   **posição** na árvore. O nó é correlacionado à URL pública pelo
+   **número documental** (fallback: ordem de renderização).
 
 5. **Último Despacho** (`tree.py`): entre os nós da série "Despacho",
    escolhe o de **maior data** (desempate: maior posição na árvore); sem
@@ -165,7 +183,7 @@ copiado do coletor de origem.
 | `src/sei_insights/documents/tree.py`     | Leitura da árvore de documentos, correlação nó → URL, último Despacho. |
 | `src/sei_insights/documents/text_ing.py` | Extração de texto de PDF via `pypdf`.                             |
 | `src/sei_insights/storage/mirror.py`     | Espelho SQLite da planilha (`MirrorStore`).                        |
-| `src/sei_insights/storage/report.py`     | Geração da planilha XLSX (abas principal, Novos, Resumo).         |
+| `src/sei_insights/storage/report.py`     | Geração da planilha XLSX (abas principal e Resumo da última execução). |
 | `src/sei_insights/utils/helpers.py`      | Apoio: normalização de número, SHA-256, MIME, nomes seguros.      |
 | `requirements.txt`                       | Dependências Python do projeto (fonte única).                     |
 | `tests/`                                 | Testes automatizados (`unittest`).                                 |
@@ -390,39 +408,67 @@ python -m sei_insights --saida relatorios/setembro.xlsx
 > Não pressione ENTER no terminal — o programa continua sozinho assim que
 > o campo é preenchido.
 
+### O que o CLI loga
+
+No `INFO` (padrão), o terminal mostra:
+
+- **o período pesquisado** (`Pesquisa de DD/MM/AAAA a DD/MM/AAAA | órgão ... |
+  unidade ...: N processo(s) encontrado(s)`) seguido da **listagem dos
+  processos encontrados** na busca, com o número e o link;
+- **cada processo consultado** ao longo da análise
+  (`Consultando processo NNNNN.NNNNNN/AAAA-NN`);
+- ao final, **`log_summary`**: a listagem dos processos da planilha
+  (`N) número | situação | status`) e as **quantidades** — total, novos e
+  a quebra por status de coleta (`concluído`, `concluído (cache)`,
+  `erro: ...`) e por situação.
+
 ---
 
 ## O que é gerado
 
 ### Planilha XLSX
 
-Arquivo `sei_insights.xlsx` (ou o caminho de `--saida`) com **três abas**:
+Arquivo `sei_insights.xlsx` (ou o caminho de `--saida`) com **duas abas**:
 
 - **Aba principal** — espelho do estado atual: **uma linha por processo**
   com as colunas abaixo;
-- **Novos** — processos que **não** estavam no espelho anterior (mesma
-  estrutura da aba principal);
-- **Resumo** — contagens: total, novos, por situação e por status de
-  coleta.
+- **Resumo da última execução** — quando a execução rodou e contagens,
+  em blocos: **Data e hora da execução** e **Período pesquisado**
+  (início a fim, no formato `DD/MM/AAAA a DD/MM/AAAA`), **Visão geral**
+  (`Total de processos`, `Novos`), tabela **Por situação** e tabela
+  **Por status** (`Classificação | Quantidade`).
 
-| Coluna               | Conteúdo                                                    |
-| -------------------- | ----------------------------------------------------------- |
-| `numero`             | Número do processo (normalizado).                           |
-| `titulo`             | Título exibido na pesquisa pública.                         |
-| `data_execucao`      | Data/hora da execução que gerou a linha.                    |
-| `data_analise`       | Data/hora em que a situação foi calculada. Uma "vitória do cache" pode mantê-la mais antiga que a execução. |
-| `data_ultimo_despacho` | Data do último Despacho (quando conhecida).              |
-| `situacao`           | Situação classificada (ex.: "Aguardando providências de X"). |
-| `destino`            | Unidade/órgão de destino.                                   |
-| `acao_esperada`      | Ação pedida (análise, assinatura, retorno, providências...). |
-| `pendencia_curta`    | Resumo de 1 linha: o que falta e quem está com o processo.  |
-| `link_process`       | URL pública do processo.                                    |
-| `status_coleta`      | `concluído`, `concluído (cache)` ou `erro: <mensagem>`.     |
-| `hash_ultimo_despacho` | Hash SHA-256 do identificador do último Despacho (usado pelo cache). |
+### As colunas da planilha
+
+Cada linha da aba principal corresponde a **um processo**:
+
+| Coluna | Explicação |
+| ------ | ---------- |
+| `numero` | Número **canônico** do processo (`NNNNN.NNNNNN/AAAA-NN`), lido do cabeçalho da página pública (`Processo:`), normalizado. Mesmo quando a busca descobre o processo via uma linha de documento, aqui vale o número do **processo** — nunca o número do documento. É a chave primária no espelho SQLite. |
+| `data_ultimo_despacho` | Data do último Despacho da árvore de documentos, lida da coluna **"Data de Inclusão"** da tabela da página pública (`dd/mm/aaaa`; hora:minuto da célula é ignorado). Vazia quando não há despacho público ou a data não foi exibida. |
+| `situacao` | Situação classificada pelo motor de regras a partir do texto do último Despacho (ex.: "Aguardando providências de X"). Valores especiais: `Sem despacho público`, `Texto não extraível (digitalizado?)`, fallback `Em análise` e `Erro / retry`. |
+| `destino` | **Destinatário citado no cabeçalho do despacho** na primeira linha de destinatário (`Ao/Aos/À/Às <nome>`, ignorando cópia `C/c:` e cortando em `Assunto:`/`Referência:`), mantido **por extenso e exato** (sem o `Ao/Aos/À/Às`); vira **sigla** só quando o **nome inteiro** equivaler a uma chave do mapa `siglas` do `regras.json` (normalização de acentos/hífens) ou quando citado como `(SIGLA)`/após travessão — ex.: `SE`, `CGATI`, `COSIS`, `SGA` vs `Gabinete da Ministra`. Sem cabeçalho de destinatário, é preenchido pela regra do corpo. Vazia quando não envolve destinatário. |
+| `acao_esperada` | Ação pedida pelo despacho (análise, assinatura, retorno, providências, ciência...). Vazia quando não se aplica. |
+| `pendencia_curta` | Resumo de uma linha: **quem está com o processo** e **o que falta**. Vazia quando não há pendência identificada. |
+| `status_coleta` | Como a linha foi produzida: `concluído` (analisado nesta execução, com download quando aplicável), `concluído (cache)` (reaproveitada da execução anterior porque o hash não mudou) ou `erro: <mensagem>` (falha isolada, não interrompe os demais). |
+| `hash_ultimo_despacho` | SHA-256 do identificador `número\|data` do último Despacho. Base do cache: inalterado → análise preservada; mudou → reanálise e novo download. É hash do **identificador**, não do texto do PDF (intencional). |
+| `link_process` | URL pública do processo (`md_pesq_processo_exibir.php?TOKEN`) — **última coluna**. É a **identidade estável** do processo entre execuções: usada na dedupe da descoberta e como chave alternativa do cache. |
+
+> **Todos os valores das abas são gravados como Texto** (formato `@`).
+> Assim o Excel não tenta interpretar `numero`
+> (`21260.002715/2026-53` tem `.`, `/`, `-`), hashes ou links como número,
+> evitando triângulos de erro e conversões indesejadas. As quantidades do
+> Resumo da última execução restam números reais.
+
+> **Onde ficou `data_execucao`?** Ela não se repete mais em cada linha da
+> planilha (redundante): a data/hora da execução fica **uma única vez** na
+> aba **Resumo da última execução** (campo **Data e hora da execução**).
+> No espelho SQLite (`.state/sei_insights.sqlite3`) a coluna
+> `data_execucao` **continua em cada linha** — nada mudou no banco.
 
 A planilha é **substituída a cada execução** (espelho do momento). Um
-resultado vazio (0 processos) é válido: a planilha é gerada com as abas
-vazias e o Resumo zerado, sem erro.
+resultado vazio (0 processos) é válido: a planilha é gerada com a aba
+principal vazia e o Resumo zerado, sem erro.
 
 ### `.state/`
 
@@ -445,16 +491,32 @@ uma linha de ser gravada.
 O motor (`rules.py`) lê `regras.json` — uma **lista ordenada** de regras.
 Para cada despacho:
 
-1. o texto é **normalizado**: múltiplos espaços/quebras viram um único
-   espaço (`re.sub(r"\s+", " ", text)`);
-2. as regras são testadas **na ordem do arquivo**, com a primeira
+1. o texto é separado em **cabeçalho** e **corpo**. O cabeçalho é o bloco
+   inicial do documento (órgão, `DESPACHO`, `Processo nº`, destinatário
+   `À/Ao/Aos/Às <nome>`); o corpo é o que sobra. Só o **corpo** alimenta as
+   regras de situação/ação — palavras como `Secretaria` no papel timbrado não
+   contaminam mais a classificação (sem linha de destinatário, o bloco inicial
+   do timbrado também é descartado do corpo);
+2. do cabeçalho é lido o **destinatário** (primeira linha `À/Ao/Aos/Às`,
+   ignorando cópia `C/c:` e cortando em `Assunto:`/`C/c`/`Referência:`), mantido
+   **por extenso e exato** (sem o `Aos/Ao/Às/À`); vira **sigla** somente quando o
+   **nome inteiro** equivaler a uma chave do mapa `siglas` do `regras.json` (o
+   nome é normalizado p/ comparação, ignorando acentos e hífens), ou quando a
+   sigla aparece entre parênteses (`(CGATI)`) ou após travessão (`– COSIS`).
+   É **o nome exato** que vale: `Gabinete da Secretaria-Executiva` continua
+   por extenso (não vira `SE`). Sem destinatário, `destino` vem da regra do
+   corpo;
+3. o corpo normalizado (múltiplos espaços/quebras viram um único espaço) é
+   testado contra as regras **na ordem do arquivo**, com a primeira
    correspondência vencendo (`re.search(..., re.IGNORECASE)`, caixa
    indiferente);
-3. a regra vencedora preenche os quatro campos de saída. `destino`,
-   `situacao`, `acao_esperada` e `pendencia_curta` podem usar
-   **backreferences** (`\1`, `\2`...) que são expandidos pelos grupos
-   capturados do padrão;
-4. se **nenhuma** regra casar, vale o **fallback** (padrão: situação
+4. a regra vencedora preenche os quatro campos de saída; `situacao`,
+   `acao_esperada` e `pendencia_curta` podem usar **backreferences**
+   (`\1`, `\2`...) expandidas pelos grupos capturados do padrão;
+5. o `destino` do **cabeçalho** (passo 2) **sobrepõe** o da regra quando
+   existe; mesmo sem regra casando, o destinatário preenche `destino` no
+   **fallback**;
+6. se **nenhuma** regra casar, vale o **fallback** (padrão: situação
    `"Em análise"`).
 
 Cada regra tem a forma:
@@ -506,23 +568,28 @@ vírgula, ponto ou fim do texto) e padrões temáticos sem destino:
 | ----- | ------- | -------- |
 | 6 | "para/aguardando/pendente de **assinatura**" | `Pendente de assinatura` |
 | 7 | "retorno a/aguardando retorno de/retorno para <destino>" | `Aguardando retorno` |
-| 8 | "encaminha-se/remete-se (os autos) a/para <destino>" | `Encaminhado a <destino>` |
-| 9 | "para/com vistas a (ação) de <destino>" | `Aguardando <ação> de <destino>` |
-| 10–11 | "determino/determina-se o arquivamento", "arquive-se", "pelo arquivamento" | `Arquivado` |
-| 12 | "devolva-se/devolvam-se/devolução dos autos" | `Devolvido` |
-| 13 | "converta-se/transforme-se/conversão em (ofício\|nota técnica\|memorial\|termo)" | `Em conversão/transformação` |
-| 14 | "dê-se ciência/cientifique-se/para ciência de <destino>" | `Para ciência de <destino>` |
-| 15 | "adote-se/providencie-se/tomar providências (por) <destino>" | `Aguardando providências de <destino>` |
-| 16 | "no prazo de/em até/prazo de **N** (dias\|horas\|meses)" | `Com prazo (N dias)` |
-| 17 | "\b(defiro\|indefiro\|parcialmente procedente\|improcedente\|procedente)\b" | `Decisão: <termo>` |
-| 18 | "cumpra-se/para cumprimento/determino cumprimento" | `Para cumprimento` |
-| 19 | menção a unidade interna (`SGA`, `CCL`, `CTI`, `SCL`, `SG`, `COORDENAÇÃO`, `DIRETORIA`, `SECRETARIA`, `GERÊNCIA`, `NÚCLEO`, `DEPARTAMENTO`...) | `Em <unidade>` |
-| 20 | órgão externo (`Ministério Público`, `Tribunal de Contas`, `Controladoria`, `Polícia Federal`, `Receita Federal`, `INSS`, `AGU`, `PGFN`, `MPF`, `TCU`, `CGU`...) | `Encaminhado a órgão externo (<órgão>)` |
+| 8 | "encaminha-se/remete-se (os autos) a **<alvo>**, para **<ação>**" (fecho do despacho; ex.: "... à CGATI, para conhecimento e deliberação") | `Encaminhado a <ação>` |
+| 9 | "encaminho o presente processo para <ação> quanto à ..." | `Encaminhado a <ação>` |
+| 10 | "encaminha-se/remete-se (os autos) a/para <destino>" | `Encaminhado a <destino>` |
+| 11 | "para/com vistas a (ação) de <destino>" | `Aguardando <ação> de <destino>` |
+| 12–13 | "determino/determina-se o arquivamento", "arquive-se", "pelo arquivamento" | `Arquivado` |
+| 14 | "devolva-se/devolvam-se/devolução dos autos" | `Devolvido` |
+| 15 | "converta-se/transforme-se/conversão em (ofício\|nota técnica\|memorial\|termo)" | `Em conversão/transformação` |
+| 16 | "dê-se ciência/cientifique-se/para ciência de <destino>" | `Para ciência de <destino>` |
+| 17 | "adote-se/providencie-se/tomar providências (por) <destino>" | `Aguardando providências de <destino>` |
+| 18 | "no prazo de/em até/prazo de **N** (dias\|horas\|meses)" | `Com prazo (N dias)` |
+| 19 | "\b(defiro\|indefiro\|parcialmente procedente\|improcedente\|procedente)\b" | `Decisão: <termo>` |
+| 20 | "cumpra-se/para cumprimento/determino cumprimento" | `Para cumprimento` |
+| 21 | "sugere-se ... seja retomada/retomado ... planejamento" (despacho que propõe retomar em ocasião futura, ex.: resposta a apoio orçamentário) | `Aguardando retomada (avaliação futura)` |
+| 22 | menção a unidade interna (`SGA`, `CCL`, `CTI`, `SCL`, `SG`, `COORDENAÇÃO`, `DIRETORIA`, `SECRETARIA`, `GERÊNCIA`, `NÚCLEO`, `DEPARTAMENTO`...) | `Em <unidade>` |
+| 23 | órgão externo (`Ministério Público`, `Tribunal de Contas`, `Controladoria`, `Polícia Federal`, `Receita Federal`, `INSS`, `AGU`, `PGFN`, `MPF`, `TCU`, `CGU`...) | `Encaminhado a órgão externo (<órgão>)` |
 
 > **Ordem importa.** Por serem avaliadas na ordem do arquivo, regras mais
 > específicas devem vir primeiro. Uma regra genérica que casa quase tudo
 > (ex.: a de órgão externo) fica no fim, para não "roubar" casos que as
-> regras anteriores já teriam classificado melhor.
+> regras anteriores já teriam classificado melhor. As regras 8 e 9
+> (fecho com `para <ação>`) vêm antes da regra 10 genérica e lidam
+> também com quebra de linha na extração do PDF (`en\ncaminho` → `en caminho`).
 >
 > **Ajuste de padrões:** por serem expressões regulares, adicionar/editar
 > uma regra exige cuidado com escapes no JSON. Uma backreference no JSON
@@ -532,10 +599,10 @@ vírgula, ponto ou fim do texto) e padrões temáticos sem destino:
 ### O fallback "Em análise"
 
 Se nenhuma regra casar — texto irrelevante, conteúdo digitalizado sem
-texto útil, formato inesperado — o processo recebe a situação padrão
-**"Em análise"**, com `destino`, `acao_esperada` e `pendencia_curta`
-vazios. Isso impede que um despacho desconhecido "trave" o restante da
-execução: a linha é gravada na planilha mesmo assim.
+texto útil, formato inesperado — a situação padrão é **"Em análise"**.
+O `destino` ainda é preenchido quando o cabeçalho cita o destinatário
+(`À/Ao/Aos/Às <nome>`). Isso impede que um despacho desconhecido "trave" o
+restante da execução: a linha é gravada na planilha mesmo assim.
 
 ---
 
@@ -550,22 +617,39 @@ processo:
 
 - **sem cache ou com `--force`** → analisa do zero;
 - **com cache e hash inalterado** → usa os dados da análise anterior
-  (campo `data_analise` preservado), marcando `status_coleta` como
-  `concluído (cache)`. A linha continua sendo gravada na planilha;
+  (situação, destino, ação esperada, pendência e data do despacho
+  preservados), marcando `status_coleta` como `concluído (cache)`. A
+  linha continua sendo gravada na planilha;
 - **com cache e hash mudou** (novo Despacho no SEI) → **reanalisa**
   o processo com a análise nova;
 - **falha ao analisar** → gera linha `Erro / retry` com `status_coleta`
   = `erro: <mensagem>`, sem interromper os demais processos.
+
+A linha do espelho anterior é localizada primeiro pelo **número** e, se
+não houver correspondência, pela **URL** (`link_process`). Isso importa
+porque a descoberta pode usar números diferentes entre execuções (nº de
+documento num dia, nº de documento de outro documento no dia seguinte),
+mas a URL da página do processo é estável. Um processo é considerado
+**"novo"** apenas quando **nunca** foi visto antes — não casa nem por
+número nem por URL.
 
 O hash é calculado sobre o **identificador do Despacho**, **não** sobre o
 texto extraído. Isso é intencional: um PDF digitalizado (sem camada de
 texto) não "congela" o processo — se o Despacho mudar, o identificador
 muda e o processo é rebaixado e reanalisado na próxima execução.
 
+> **Cache não verifica o arquivo em disco.** Quando o hash não muda, a
+> análise anterior é reaproveitada **sem conferir se o PDF ainda existe**
+> em `downloads/`. Se os arquivos forem apagados manualmente (ex.: para
+> limpar os duplicados antigos), a próxima execução continuará marcando o
+> processo como `concluído (cache)` e não baixará de novo. Para forçar o
+> download, rode `python -m sei_insights --force` (ou limpe o histórico,
+> veja [Como limpar os dados](#como-limpar-os-dados-ou-reprocessar)).
+
 > **Nota sobre a janela:** o espelho guarda apenas a última execução.
 > Alternar a janela entre execuções (ex.: `--dias 7` ↔ `--dias 30`) pode
 > sinalizar como "novos" processos já vistos antes — o efeito fica
-> registrado na aba Resumo.
+> registrado na aba Resumo da última execução (bloco **Visão geral**).
 
 ---
 
@@ -669,6 +753,21 @@ e adicione um padrão para o caso real observado.
 **O processo ficou com `status_coleta = erro: ...`**
 Um processo com falha não interrompe os demais. Corrija a causa indicada
 na mensagem e rode `--force` para tentar novamente.
+
+**Rodei e nada foi baixado — só "concluído (cache)"**
+Normal. Quando o último Despacho não mudou desde a execução anterior
+(mesmo `hash_ultimo_despacho`), o programa reaproveita a análise e **não
+rebaixa o PDF** — é o comportamento do cache. Atenção: o cache **não**
+confere se o PDF ainda existe em `downloads/`. Se você apagou os arquivos
+à mão, use `python -m sei_insights --force` para baixar de novo.
+
+**O processo apareceu com número `NNNNN.NNNNNN/AAAA-NN` que não era o que
+eu vi na busca**
+A busca devolve linhas de **documentos** (porque os "tipos de pesquisa"
+também estão marcados) e uma linha de documento só mostra o número do
+**documento**. O programa deduplica pela URL do processo e, ao abrir a
+página, usa o número canônico do cabeçalho (`Processo:`). Ou seja, o
+número da planilha é sempre o do **processo**, não o do documento.
 
 **A biblioteca `ddddocr` não instala (Linux/Windows)**
 Ela depende de `onnxruntime`/`opencv-python-headless`; em caso de

@@ -10,27 +10,30 @@ from typing import Optional
 logger = logging.getLogger("sei-insights")
 
 FIELDS = [
-    "numero", "titulo", "data_execucao", "data_analise",
-    "data_ultimo_despacho", "situacao", "destino", "acao_esperada",
-    "pendencia_curta", "link_process", "status_coleta",
-    "hash_ultimo_despacho",
+    "numero", "data_execucao", "data_ultimo_despacho", "situacao",
+    "destino", "acao_esperada", "pendencia_curta", "status_coleta",
+    "hash_ultimo_despacho", "link_process",
 ]
+
+CREATE_PROCESSES = (
+    "CREATE TABLE IF NOT EXISTS processes ("
+    + ", ".join(f"{f} TEXT" for f in FIELDS)
+    + ", PRIMARY KEY (numero))"
+)
 
 
 @dataclass(slots=True)
 class ProcessRow:
     numero: str
-    titulo: str
     data_execucao: str
-    data_analise: str
     data_ultimo_despacho: str
     situacao: str
     destino: str
     acao_esperada: str
     pendencia_curta: str
-    link_process: str
     status_coleta: str
     hash_ultimo_despacho: str
+    link_process: str
 
 
 def despacho_hash(identificador: str) -> str:
@@ -48,11 +51,13 @@ class MirrorStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS processes ("
-            + ", ".join(f"{f} TEXT" for f in FIELDS)
-            + ", PRIMARY KEY (numero))"
-        )
+        self.conn.execute(CREATE_PROCESSES)
+        # Schema mudou (ex.: colunas removidas/renomeadas): recria a tabela
+        # para o espelho continuar sendo exatamente igual à planilha.
+        cols = [r[0] for r in self.conn.execute("PRAGMA table_info(processes)")]
+        if cols != FIELDS:
+            self.conn.execute("DROP TABLE processes")
+            self.conn.execute(CREATE_PROCESSES.replace("IF NOT EXISTS ", ""))
         self.conn.commit()
 
     def close(self) -> None:

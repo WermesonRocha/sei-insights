@@ -19,12 +19,49 @@ class DocNode:
     url: str = ""
 
 
+def _inclusao_index(container) -> Optional[int]:
+    """Índice da célula 'Data de Inclusão' na tabela da árvore (None se não achar).
+
+    Na página real do processo a árvore é uma tabela (`table.infraTable`)
+    com cabeçalho `Processo / Documento | Tipo | Data | Data de Inclusão |
+    Unidade`; o link do documento traz só a série (`title`), e a data fica
+    na coluna "Data de Inclusão". Procuramos a 1ª linha-cabeçalho cujas
+    células contenham esse rótulo (o texto é específico o bastante para
+    não colidir com as tabelas de metadados/andamentos).
+    """
+    for tr in container.find_all("tr"):
+        cells = tr.find_all("th", recursive=False) or tr.find_all("td", recursive=False)
+        for i, cell in enumerate(cells):
+            if re.search(r"data\s+de\s+inclus", cell.get_text(" ", strip=True),
+                         re.IGNORECASE):
+                return i
+    return None
+
+
+def _row_date(row, inclusao_index: Optional[int]) -> str:
+    """Data da linha: célula 'Data de Inclusão' quando existe; senão a do rótulo.
+
+    Na tabela real o rótulo do link só tem a série, então a data vem da
+    coluna "Data de Inclusão" (ex.: `29/09/2026 16:02` → `29/09/2026`).
+    Nas árvores `li` (históricas/testes) a data já vem no rótulo.
+    """
+    if inclusao_index is not None:
+        cells = row.find_all("td", recursive=False)
+        if inclusao_index < len(cells):
+            cell_text = cells[inclusao_index].get_text(" ", strip=True)
+            m = DATE_RE.search(cell_text)
+            if m:
+                return m.group(1)
+    return ""
+
+
 def parse_tree(html: str) -> list[DocNode]:
     """Calibrado com o spike (Task 1). Default lê `li`/`tr` com rótulo."""
     soup = BeautifulSoup(html, "html.parser")
     container = soup.select_one(".infraArvore")
     if container is None:
         container = soup
+    inclusao = _inclusao_index(container)
     nodes: list[DocNode] = []
     for pos, row in enumerate(container.select("li, tr")):
         label_el = row.select_one("span.infraLabel, label, a[title]")
@@ -34,6 +71,7 @@ def parse_tree(html: str) -> list[DocNode]:
         if not label:
             continue
         date_m = DATE_RE.search(label)
+        data = _row_date(row, inclusao) or (date_m.group(1) if date_m else "")
         num_m = NUM_RE.search(label)
         if num_m is None:
             checkbox = row.select_one("input[type='checkbox'][value]")
@@ -46,7 +84,7 @@ def parse_tree(html: str) -> list[DocNode]:
             DocNode(
                 serie=first_word,
                 numero=num_m.group(1),
-                data=date_m.group(1) if date_m else "",
+                data=data,
                 posicao=pos,
             )
         )

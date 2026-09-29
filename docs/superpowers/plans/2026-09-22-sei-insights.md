@@ -833,7 +833,7 @@ git commit -m "feat: leitura da árvore, correlação nó->URL e seleção do ú
   - `class RulesEngine(config: Optional[dict] = None)` with `classify(text: str) -> RuleResult` and a classmethod `from_file(path: pathlib.Path) -> RulesEngine`.
   - `regras.json`: ordered list of rules `{pattern, situacao, destino, acao_esperada, pendencia_curta}` + a `fallback` object.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_rules.py`:
 
@@ -892,12 +892,12 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(r.situacao, "Em análise")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_rules -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'rules'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `regras.json`:
 
@@ -997,12 +997,12 @@ class RulesEngine:
         return RuleResult(**self.fallback)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_rules -v`
 Expected: PASS (2 tests). The shipped `regras.json` is a starter set; the user calibrates terms later without touching code. During calibration, prefer concrete patterns named after real despachos (per spec §9 "calibração inicial").
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rules.py regras.json tests/test_rules.py
@@ -1024,7 +1024,7 @@ git commit -m "feat: motor de regras determinístico com regras.json"
   - `def expected_total(data: dict) -> int` — `int(data.get("itens") or 0)`.
   - `def pagination_params(inicio: int, rows_solr: int = 50) -> dict` — `{"isPaginacao": "true", "inicio": inicio, "rowsSolr": rows_solr}`.
 
-- [ ] **Step 1: Write the failing tests** (adjust fixture to the real JSON shape from the spike if different)
+- [x] **Step 1: Write the failing tests** (adjust fixture to the real JSON shape from the spike if different)
 
 `tests/test_discovery.py`:
 
@@ -1063,12 +1063,12 @@ class DiscoveryTest(unittest.TestCase):
                          {"isPaginacao": "true", "inicio": 50, "rowsSolr": 50})
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_discovery -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'discovery'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `discovery.py`:
 
@@ -1113,12 +1113,12 @@ def pagination_params(inicio: int, rows_solr: int = 50) -> dict:
     return {"isPaginacao": "true", "inicio": inicio, "rowsSolr": rows_solr}
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_discovery -v`
 Expected: PASS (5 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add discovery.py tests/test_discovery.py
@@ -1139,7 +1139,7 @@ git commit -m "feat: parsing da resposta de descoberta e parâmetros de paginaç
   - `def build_resumo(rows: list[ProcessRow], novos: list[ProcessRow]) -> dict` — `total`, `novos`, `por_situacao: dict[str,int]`, `por_status: dict[str,int]`.
   - `def write_spreadsheet(path: pathlib.Path, rows: list[ProcessRow], novos: list[ProcessRow], resumo: dict) -> None` — writes tabs "Aba principal" (all rows), "Novos" (new rows), "Resumo" (the counts). Column header order must match `ProcessRow` field order. An empty `rows` list still writes a valid workbook with headers and a zeroed summary.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_report.py`:
 
@@ -1195,12 +1195,12 @@ class ReportTest(unittest.TestCase):
             wb.close()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_report -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'report'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `report.py`:
 
@@ -1259,12 +1259,12 @@ def write_spreadsheet(
     wb.close()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_report -v`
 Expected: PASS (2 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add report.py tests/test_report.py
@@ -1290,7 +1290,7 @@ git commit -m "feat: planilha xlsx com abas espelho, novos e resumo"
     - NEW `search_processes(orgao: str, unidade: str, inicio: str, fim: str, page_size: int = 50) -> list[ProcessResult]`:
       opens the search page, selects organ/unit per the spike's selector strategy (Task 1), marks **all three** search-type checkboxes, fills the date fields, installs the AJAX listener, submits, parses the JSON via `discovery`, then paginates through the remaining pages via `context.request` POST to the AJAX endpoint using `pagination_params`, following `expected_total`; returns unique `ProcessResult`s in order.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_sei_client.py` — pure parsing/matching tests that run without a browser (mirrors the collector's `FakePage`/`FakeLocator` approach):
 
@@ -1348,12 +1348,12 @@ class ExtractProcessTest(unittest.TestCase):
         self.assertIsNone(extract_process("<html></html>", "21260.003436/2026-15"))
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_sei_client -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'sei_client'`
 
-- [ ] **Step 3: Copy and adapt the implementation**
+- [x] **Step 3: Copy and adapt the implementation**
 
 `sei_client.py` — copy from the collector `main.py` and adapt:
 
@@ -1478,12 +1478,12 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'sei_client'`
 
 > The spike (Task 1) is the authority for `#txtDataInicialPesquisa` field names and the organ/unit selector strategy; if the live names differ, update `_set_search_criteria` accordingly and note it in the spike doc. Keep `ensure_orgaos_selected` as the degradation path, and keep a rate-limit wait before every pagination POST.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_sei_client -v`
 Expected: PASS (5 tests) — the parsing/matching-predicate tests do not require a browser or the live site.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add sei_client.py tests/test_sei_client.py
@@ -1505,7 +1505,7 @@ git commit -m "feat: cliente SEI com descoberta por unidade/período e paginaç�
   - `def now_str() -> str` — local time `"YYYY-MM-DD HH:MM:SS"`.
   - `def main() -> int`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_main.py`:
 
@@ -1603,12 +1603,12 @@ class NowStrTest(unittest.TestCase):
         self.assertRegex(now_str(), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_main -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'main'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `main.py` (core orchestration; browser glue is thin):
 
@@ -1736,17 +1736,17 @@ if __name__ == "__main__":
 
 `README.md` — concise usage doc: purpose, install, `python main.py` with the flags from Global Constraints, a note that CAPTCHA is OCR or `--manual-captcha`, and that the spreadsheet is the source of truth (SQLite mirrors it).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_main -v`
 Expected: PASS (7 tests)
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `python -m unittest discover -s tests -v`
 Expected: all project tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add main.py tests/test_main.py README.md

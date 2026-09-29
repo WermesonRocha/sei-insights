@@ -6,19 +6,37 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
+from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
+
+from sei_insights.config import (
+    STATE_DIR, DATABASE_PATH, REGRAS_JSON, DEFAULT_ORGAO, DEFAULT_UNIDADE,
+    DEFAULT_DIAS, DEFAULT_MIN_DELAY, DEFAULT_MAX_DELAY, DEFAULT_SAIDA,
+    DEFAULT_TIMEOUT_MS,
+)
 from sei_insights.storage.report import build_resumo, write_spreadsheet
 from sei_insights.clients.sei_client import ProcessResult, SeiClient
-from sei_insights.storage.mirror import MirrorStore, ProcessRow
-from sei_insights.config import STATE_DIR, DATABASE_PATH, REGRAS_JSON, DEFAULT_ORGAO, DEFAULT_UNIDADE, DEFAULT_DIAS, DEFAULT_MIN_DELAY, DEFAULT_MAX_DELAY, DEFAULT_SAIDA
+from sei_insights.storage.mirror import MirrorStore, ProcessRow, despacho_hash
+from sei_insights.clients.rate_limit import RateLimiter
+from sei_insights.config.rules import RulesEngine
+from sei_insights.documents.text_ing import extract_text_from_pdf
+from sei_insights.documents.tree import parse_tree, select_last_despacho
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)-8s | %(message)s",
                     datefmt="%Y-%m-%d %H:%M:%S")
 logger = logging.getLogger("sei-insights")
 
+BROWSER_STATE_PATH = STATE_DIR / "browser_state.json"
+
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/140.0.0.0 Safari/537.36"
+)
+
 
 def now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
 
 def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -44,6 +62,43 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
 AnalyzeCallable = Callable[[ProcessResult, Optional[ProcessRow], bool, str], ProcessRow]
 
 
+def log_discovered(
+    found: list[ProcessResult],
+    inicio: str,
+    fim: str,
+    orgao: str,
+    unidade: str,
+) -> None:
+    """Loga o período pesquisado e a listagem dos processos encontrados."""
+    logger.info(
+        "Pesquisa de %s a %s | órgão %s | unidade %s: %d processo(s) encontrado(s)",
+        inicio, fim, orgao, unidade, len(found),
+    )
+    for i, p in enumerate(found, start=1):
+        logger.info("  %d) %s  (%s)", i, p.number, p.url)
+
+
+def log_summary(
+    rows: list[ProcessRow],
+    novos: list[ProcessRow],
+    inicio: str,
+    fim: str,
+) -> None:
+    """Loga o resumo final: listagem dos processos consultados e quantidades."""
+    resumo = build_resumo(rows, novos)
+    logger.info(
+        "Execução concluída (%s a %s): %d processo(s), %d novo(s).",
+        inicio, fim, resumo["total"], resumo["novos"],
+    )
+    logger.info("Processos consultados:")
+    for i, r in enumerate(rows, start=1):
+        logger.info("  %d) %s | %s | %s", i, r.numero, r.situacao, r.status_coleta)
+    for status, n in sorted(resumo["por_status"].items()):
+        logger.info("  status %s: %d", status, n)
+    for situacao, n in sorted(resumo["por_situacao"].items()):
+        logger.info("  situação %s: %d", situacao, n)
+
+
 def build_rows(
     previous: dict[str, ProcessRow],
     found: list[ProcessResult],
@@ -53,8 +108,17 @@ def build_rows(
 ) -> tuple[list[ProcessRow], list[ProcessRow]]:
     rows: list[ProcessRow] = []
     novos: list[ProcessRow] = []
+    # Cache também casa pela URL do processo: a descoberta pode vir por nº de
+    # documento (data-prot) numa execução e por nº canônico noutra; a URL da
+    # página do processo é a identidade estável entre execuções.
+    previous_by_link: dict[str, ProcessRow] = {
+        prev_row.link_process: prev_row
+        for prev_row in previous.values()
+        if prev_row.link_process
+    }
     for p in found:
-        prev = previous.get(p.number)
+        logger.info("Consultando processo %s", p.number)
+        prev = previous.get(p.number) or previous_by_link.get(p.url)
         row = None
         # Pula analyze se houver cache, não forçado, E hash bate (mesmo último despacho)
         if prev is not None and not force:
@@ -63,10 +127,10 @@ def build_rows(
             try:
                 current_row = analyze(p, prev, force, now)
                 if current_row.hash_ultimo_despacho == prev.hash_ultimo_despacho:
-                    # Hash inalterado: usa dados do cache, preserva data de análise original
+                    # Hash inalterado: usa dados do cache
                     row = ProcessRow(
-                        numero=p.number, titulo=p.title, data_execucao=now,
-                        data_analise=prev.data_analise, data_ultimo_despacho=prev.data_ultimo_despacho,
+                        numero=p.number, data_execucao=now,
+                        data_ultimo_despacho=prev.data_ultimo_despacho,
                         situacao=prev.situacao, destino=prev.destino, acao_esperada=prev.acao_esperada,
                         pendencia_curta=prev.pendencia_curta, link_process=p.url,
                         status_coleta="concluído (cache)", hash_ultimo_despacho=prev.hash_ultimo_despacho,
@@ -77,8 +141,7 @@ def build_rows(
             except Exception as exc:
                 logger.warning("Erro ao analisar %s: %s", p.number, exc)
                 row = ProcessRow(
-                    numero=p.number, titulo=p.title, data_execucao=now,
-                    data_analise=now, data_ultimo_despacho="",
+                    numero=p.number, data_execucao=now, data_ultimo_despacho="",
                     situacao="Erro / retry", destino="", acao_esperada="",
                     pendencia_curta="", link_process=p.url,
                     status_coleta=f"erro: {exc}", hash_ultimo_despacho="",
@@ -89,48 +152,200 @@ def build_rows(
             except Exception as exc:
                 logger.warning("Erro ao analisar %s: %s", p.number, exc)
                 row = ProcessRow(
-                    numero=p.number, titulo=p.title, data_execucao=now,
-                    data_analise=now, data_ultimo_despacho="",
+                    numero=p.number, data_execucao=now, data_ultimo_despacho="",
                     situacao="Erro / retry", destino="", acao_esperada="",
                     pendencia_curta="", link_process=p.url,
                     status_coleta=f"erro: {exc}", hash_ultimo_despacho="",
                 )
         rows.append(row)
-        if row.numero not in previous:
+        if prev is None:
             novos.append(row)
     return rows, novos
 
 
+def _date_window(args: argparse.Namespace, today: datetime) -> tuple[str, str]:
+    """Deriva a janela de datas DD/MM/YYYY para a pesquisa.
+
+    Opera com qualquer objeto com atributos `inicio`, `fim` e `dias`
+    (testável sem argparse). `today` é injetado para determinismo.
+    """
+    if args.inicio in (None, ""):
+        inicio = (today - timedelta(days=args.dias)).strftime("%d/%m/%Y")
+    else:
+        inicio = args.inicio
+    if args.fim in (None, ""):
+        fim = today.strftime("%d/%m/%Y")
+    else:
+        fim = args.fim
+    return inicio, fim
+
+
+def create_browser(playwright: Playwright, *, headless: bool) -> tuple[Browser, BrowserContext, Page]:
+    """Cria Browser/Context/Page reaproveitando o estado anterior (cookies)."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    browser = playwright.chromium.launch(headless=headless)
+    context_kwargs = {
+        "user_agent": USER_AGENT,
+        "locale": "pt-BR",
+        "timezone_id": "America/Sao_Paulo",
+        "accept_downloads": True,
+    }
+    if BROWSER_STATE_PATH.exists():
+        context_kwargs["storage_state"] = str(BROWSER_STATE_PATH)
+    context = browser.new_context(**context_kwargs)
+    context.set_default_timeout(DEFAULT_TIMEOUT_MS)
+    page = context.new_page()
+    page.on("dialog", lambda dialog: dialog.dismiss())
+    return browser, context, page
+
+
+def save_browser_state(context: BrowserContext) -> None:
+    """Salva cookies/local storage do contexto para a próxima execução."""
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        context.storage_state(path=str(BROWSER_STATE_PATH))
+    except Exception as exc:
+        logger.warning("Não foi possível salvar estado do navegador: %s", exc)
+
+
+def analyze_process(
+    client: SeiClient,
+    p: ProcessResult,
+    prev: Optional[ProcessRow],
+    force: bool,
+    now: str,
+    rules: RulesEngine,
+) -> ProcessRow:
+    """Pipeline completo de análise de um processo público.
+
+    Abre a página, correlaciona a árvore documental, escolhe o último
+    despacho e, só quando necessário, baixa o PDF e classifica o texto.
+    O hash identifica o despacho (número|data), nunca o texto: assim um
+    PDF digitalizado não congela o cache.
+    """
+    html = client.open_process(p)
+    nodes = parse_tree(html)
+    despacho = select_last_despacho(nodes)
+
+    if despacho is None:
+        # Sem despacho na árvore: não há o que baixar.
+        return ProcessRow(
+            numero=p.number, data_execucao=now, data_ultimo_despacho="",
+            situacao="Sem despacho público", destino="", acao_esperada="",
+            pendencia_curta="", link_process=p.url,
+            status_coleta="concluído", hash_ultimo_despacho="",
+        )
+
+    identificador = f"{despacho.numero}|{despacho.data}"
+    novo_hash = despacho_hash(identificador)
+
+    if prev is not None and not force and prev.hash_ultimo_despacho == novo_hash:
+        # Mesmo último despacho já analisado: reaproveita o cache completo.
+        return ProcessRow(
+            numero=p.number, data_execucao=now,
+            data_ultimo_despacho=prev.data_ultimo_despacho,
+            situacao=prev.situacao, destino=prev.destino,
+            acao_esperada=prev.acao_esperada, pendencia_curta=prev.pendencia_curta,
+            link_process=p.url, status_coleta="concluído (cache)",
+            hash_ultimo_despacho=novo_hash,
+        )
+
+    # O download do despacho é por CLIQUE no link da árvore do SEI
+    # (download_despacho). Sem link público, o despacho é tratado como
+    # sem download possível, sem tentar rede.
+    result = client.download_despacho(
+        p.number, despacho.numero, despacho.serie,
+    )
+
+    if result is None:
+        return ProcessRow(
+            numero=p.number, data_execucao=now, data_ultimo_despacho="",
+            situacao="Sem despacho público", destino="", acao_esperada="",
+            pendencia_curta="", link_process=p.url,
+            status_coleta="concluído", hash_ultimo_despacho="",
+        )
+
+    path, _, _ = result
+    text = extract_text_from_pdf(path)
+
+    if text == "":
+        situacao = "Texto não extraível (digitalizado?)"
+        destino = acao_esperada = pendencia_curta = ""
+    else:
+        r = rules.classify(text)
+        situacao = r.situacao
+        destino = r.destino
+        acao_esperada = r.acao_esperada
+        pendencia_curta = r.pendencia_curta
+
+    return ProcessRow(
+        numero=p.number, data_execucao=now,
+        data_ultimo_despacho=despacho.data,
+        situacao=situacao, destino=destino, acao_esperada=acao_esperada,
+        pendencia_curta=pendencia_curta, link_process=p.url,
+        status_coleta="concluído", hash_ultimo_despacho=novo_hash,
+    )
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_arguments(argv)
+    if args.max_delay < args.min_delay:
+        logger.error("--max-delay deve ser >= --min-delay.")
+        return 2
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     store = MirrorStore(DATABASE_PATH)
     store.open()
     try:
         previous = store.load_snapshot()
         now = now_str()
-        # Imports de todas as fases (browser, árvore, texto, regras, relatório).
-        from sei_insights.clients.discovery import expected_total, pagination_params, parse_response  # noqa: F401
-        from sei_insights.clients.rate_limit import RateLimiter
-        from sei_insights.config.rules import RulesEngine
-        from sei_insights.clients.sei_client import (  # noqa: F401
-            ProcessResult, SeiClient)  # fluxo real usa estes
-        from sei_insights.documents.text_ing import extract_text_from_pdf
-        from sei_insights.documents.tree import correlate_urls, parse_tree, select_last_despacho
-        from sei_insights.utils.helpers import normalize_process_number  # noqa: F401
-
         rules = RulesEngine.from_file(REGRAS_JSON)
+        rate_limiter = RateLimiter(args.min_delay, args.max_delay)
+        inicio, fim = _date_window(args, datetime.now())
 
-        def analyze(p: ProcessResult, prev: Optional[ProcessRow],
-                    force: bool, now: str) -> ProcessRow:
-            # Este fluxo é satisfeito pelo SeiClient real (Task 11);
-            # a assinatura é a interface testada em build_rows.
-            raise NotImplementedError
+        browser: Optional[Browser] = None
+        context: Optional[BrowserContext] = None
+        rows: list[ProcessRow] = []
+        novos: list[ProcessRow] = []
+        with sync_playwright() as playwright:
+            try:
+                browser, context, page = create_browser(playwright, headless=False)
+                client = SeiClient(context=context, page=page, rate_limiter=rate_limiter)
+                client.use_manual_captcha = args.manual_captcha
 
-        rows, novos = build_rows(previous, [], analyze, args.force, now)
-        write_spreadsheet(Path(args.saida), rows, novos, build_resumo(rows, novos))
+                found = client.search_processes(args.orgao, args.unidade, inicio, fim)
+                log_discovered(found, inicio, fim, args.orgao, args.unidade)
+
+                def analyze(p: ProcessResult, prev: Optional[ProcessRow],
+                            force: bool, now: str) -> ProcessRow:
+                    return analyze_process(client, p, prev, force, now, rules)
+
+                rows, novos = build_rows(previous, found, analyze, args.force, now)
+            finally:
+                # Fechamos o context/browser AINDA DENTRO do bloco
+                # `with sync_playwright()`: depois disso o event loop já
+                # está parado e o close() falha com "Event loop is closed!".
+                if context is not None:
+                    save_browser_state(context)
+                    try:
+                        context.close()
+                    except Exception as exc:
+                        logger.warning(
+                            "Não foi possível fechar o contexto: %s", exc,
+                        )
+                if browser is not None:
+                    try:
+                        browser.close()
+                    except Exception as exc:
+                        logger.warning(
+                            "Não foi possível fechar o navegador: %s", exc,
+                        )
+
+        write_spreadsheet(
+            Path(args.saida), rows,
+            build_resumo(rows, novos, now, f"{inicio} a {fim}"),
+        )
         store.replace_snapshot(rows)
-        logger.info("Execução concluída: %d processos, %d novos.", len(rows), len(novos))
+        log_summary(rows, novos, inicio, fim)
         return 0
     finally:
         store.close()

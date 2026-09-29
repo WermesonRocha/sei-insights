@@ -5,6 +5,17 @@
     "acao_esperada": "",
     "pendencia_curta": ""
   },
+  "siglas": {
+    "ministério das mulheres": "MMULHERES",
+    "secretaria executiva": "SE",
+    "subsecretaria de gestão e administração": "SGA",
+    "coordenação-geral de administração e tecnologia da informação": "CGATI",
+    "coordenação de tecnologia da informação": "CTI",
+    "divisão de tecnologia da informação": "DTI",
+    "coordenação de patrimônio e serviços gerais": "CPSG",
+    "coordenação de sistemas e soluções de tecnologia da informação": "COSIS",
+    "coordenação-geral de tecnologia da informação": "CGTI"
+  },
   "regras": [
     {
       "pattern": "(?:retorno a\\s+(?:esta|essa|a)|aguardando retorno\\s+(?:da|de)|retorno para)\\s*(MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI[\\- ]DTI|MMULHERES[\\- ]SE[\\- ]SGA[\\- ]CGATI[\\- ]CTI(?![\\- ]DTI))\\b",
@@ -56,18 +67,32 @@
       "pendencia_curta": "Aguardando retorno do destinatário"
     },
     {
-      "pattern": "(?:encaminha[\\- ]?se|remete[\\- ]?se|encaminham[\\- ]?se|remetem[\\- ]?se)\\s+(?:os autos[\\s\\S]*?\\b)?(?:à|a|para)\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s+para|\\s*$)",
+      "pattern": "(?:en[ -]*caminha[ -]*se|en[ -]*caminham[ -]*se|en[ -]*caminho|remete[ -]*se|remetem[ -]*se|remeto)[\\s\\S]{0,160}?(?:à|a|para)\\s+([A-Za-zÀ-ÿ][\\wÀ-ÿ\\s/()º°+\\-]{2,80}?)\\s*,\\s*para\\s+((?:ciência|conhecimento|análise|avaliação|deliberação|manifestação|validação|adoção|providências?|apreciação)\\b[^\\n]*?)(?:,|\\s+quanto a|\\s+quanto à|\\s+sobre|\\s+acerca|\\s+(?:da|do|de|das|dos)\\b|\\s*$)",
+      "situacao": "Encaminhado a \\2",
+      "destino": "\\1",
+      "acao_esperada": "\\2",
+      "pendencia_curta": "Aguardando \\2 do destinatário"
+    },
+    {
+      "pattern": "(?:en[ -]*caminho|en[ -]*caminha[ -]*se|en[ -]*caminham[ -]*se|remeto|remete[ -]*se)\\s+o presente processo\\s+para\\s+((?:análise e providências|providências|análise)[\\wÀ-ÿ\\s,()/\\-]{0,60}?)(?:,|\\s+quanto a|\\s+quanto à|\\s*$)",
+      "situacao": "Encaminhado a \\1",
+      "destino": "",
+      "acao_esperada": "\\1",
+      "pendencia_curta": "Aguardando \\1 do destinatário"
+    },
+    {
+      "pattern": "(?:en[ -]*caminha[ -]*se|en[ -]*caminham[ -]*se|remete[ -]*se|remetem[ -]*se)\\s+(?:os autos[\\s\\S]*?\\b)?(?:à|a|para)\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s+para|\\s*$)",
       "situacao": "Encaminhado a \\1",
       "destino": "\\1",
       "acao_esperada": "análise e providências",
       "pendencia_curta": "Processo encaminhado para análise/providências"
     },
     {
-      "pattern": "(?:para|com vistas a)\\s+(?:ciência|análise|manifestação|parecer|providências)\\s+(?:da|do|de)\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s*$)",
-      "situacao": "Aguardando \\2 de \\1",
-      "destino": "\\1",
-      "acao_esperada": "\\2",
-      "pendencia_curta": "Aguardando \\2 de \\1"
+      "pattern": "(?:para|com vistas a)\\s+((?:ciência|análise|manifestação|parecer|providências))\\s+(?:da|do|de)\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s*$)",
+      "situacao": "Aguardando \\1 de \\2",
+      "destino": "\\2",
+      "acao_esperada": "\\1",
+      "pendencia_curta": "Aguardando \\1 de \\2"
     },
     {
       "pattern": "(?:determino|determina[\\- ]?se|determinam[\\- ]?se)\\s+o\\s+arquivamento",
@@ -133,6 +158,13 @@
       "pendencia_curta": "Aguardando cumprimento da determinação"
     },
     {
+      "pattern": "suger(?:e|em)[- ]se[\\s\\S]{0,120}?\\bseja(?:m)?\\s+retomad[oa]s?[\\s\\S]{0,120}?\\bplanejamento",
+      "situacao": "Aguardando retomada (avaliação futura)",
+      "destino": "",
+      "acao_esperada": "retomada",
+      "pendencia_curta": "Despacho sugere retomada oportuna da demanda (avaliação futura)"
+    },
+    {
       "pattern": "\\b(SGA|CCL|CTI|SCL|SG|COORDENA[ÇC][ÃA]O|DIRETORIA|SECRETARIA|SUPERINTEND[ÊE]NCIA|GER[ÊE]NCIA|ASSESSORIA|N[ÚU]CLEO|DIVIS[ÃA]O|DEPARTAMENTO)\\b",
       "situacao": "Em \\1",
       "destino": "\\1",
@@ -140,7 +172,7 @@
       "pendencia_curta": "Processo com \\1 para análise/próximo passo"
     },
     {
-      "pattern": "(?:Minist[ée]rio P[úu]blico|Tribunal de Contas|Controladoria|Pol[íi]cia Federal|Receita Federal|INSS|AGU|PGFN|DPF|MPF|MPDFT|TCU|CGU|CGM)",
+      "pattern": "\\b((?:Minist[ée]rio P[úu]blico|Tribunal de Contas|Controladoria|Pol[íi]cia Federal|Receita Federal|INSS|AGU|PGFN|DPF|MPF|MPDFT|TCU|CGU|CGM))\\b",
       "situacao": "Encaminhado a órgão externo (\\1)",
       "destino": "\\1",
       "acao_esperada": "providências",
