@@ -36,7 +36,7 @@ USER_AGENT = (
 
 
 def now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
 
 def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -62,6 +62,43 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
 AnalyzeCallable = Callable[[ProcessResult, Optional[ProcessRow], bool, str], ProcessRow]
 
 
+def log_discovered(
+    found: list[ProcessResult],
+    inicio: str,
+    fim: str,
+    orgao: str,
+    unidade: str,
+) -> None:
+    """Loga o período pesquisado e a listagem dos processos encontrados."""
+    logger.info(
+        "Pesquisa de %s a %s | órgão %s | unidade %s: %d processo(s) encontrado(s)",
+        inicio, fim, orgao, unidade, len(found),
+    )
+    for i, p in enumerate(found, start=1):
+        logger.info("  %d) %s  (%s)", i, p.number, p.url)
+
+
+def log_summary(
+    rows: list[ProcessRow],
+    novos: list[ProcessRow],
+    inicio: str,
+    fim: str,
+) -> None:
+    """Loga o resumo final: listagem dos processos consultados e quantidades."""
+    resumo = build_resumo(rows, novos)
+    logger.info(
+        "Execução concluída (%s a %s): %d processo(s), %d novo(s).",
+        inicio, fim, resumo["total"], resumo["novos"],
+    )
+    logger.info("Processos consultados:")
+    for i, r in enumerate(rows, start=1):
+        logger.info("  %d) %s | %s | %s", i, r.numero, r.situacao, r.status_coleta)
+    for status, n in sorted(resumo["por_status"].items()):
+        logger.info("  status %s: %d", status, n)
+    for situacao, n in sorted(resumo["por_situacao"].items()):
+        logger.info("  situação %s: %d", situacao, n)
+
+
 def build_rows(
     previous: dict[str, ProcessRow],
     found: list[ProcessResult],
@@ -80,6 +117,7 @@ def build_rows(
         if prev_row.link_process
     }
     for p in found:
+        logger.info("Consultando processo %s", p.number)
         prev = previous.get(p.number) or previous_by_link.get(p.url)
         row = None
         # Pula analyze se houver cache, não forçado, E hash bate (mesmo último despacho)
@@ -275,8 +313,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 client.use_manual_captcha = args.manual_captcha
 
                 found = client.search_processes(args.orgao, args.unidade, inicio, fim)
-                logger.info("Processos encontrados no período %s..%s: %d",
-                            inicio, fim, len(found))
+                log_discovered(found, inicio, fim, args.orgao, args.unidade)
 
                 def analyze(p: ProcessResult, prev: Optional[ProcessRow],
                             force: bool, now: str) -> ProcessRow:
@@ -305,7 +342,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         write_spreadsheet(Path(args.saida), rows, novos, build_resumo(rows, novos))
         store.replace_snapshot(rows)
-        logger.info("Execução concluída: %d processos, %d novos.", len(rows), len(novos))
+        log_summary(rows, novos, inicio, fim)
         return 0
     finally:
         store.close()

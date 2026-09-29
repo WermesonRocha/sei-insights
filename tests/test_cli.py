@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 
 from sei_insights.cli import (_date_window, analyze_process, build_rows,
-                              now_str, parse_arguments)
+                              log_discovered, log_summary, now_str,
+                              parse_arguments)
 from sei_insights.clients.sei_client import ProcessResult, PublicDocument
 from sei_insights.config.rules import RulesEngine
 from sei_insights.storage.mirror import ProcessRow, despacho_hash
@@ -128,6 +129,43 @@ class BuildRowsTest(unittest.TestCase):
         self.assertEqual(rows[0].situacao, "Guardada")
         self.assertEqual(novos, [])
 
+    def test_build_rows_loga_cada_processo_consultado(self):
+        def analyze(p, prev, force, now):
+            return row(p.number, "Nova análise", "h1")
+        with self.assertLogs("sei-insights", level="INFO") as cm:
+            build_rows({}, [pr("001"), pr("002")], analyze, False, "2026-09-22 10:00:00")
+        joined = "\n".join(cm.output)
+        self.assertIn("Consultando processo 001", joined)
+        self.assertIn("Consultando processo 002", joined)
+
+
+class LoggingTest(unittest.TestCase):
+    def test_log_discovered_lista_periodo_e_processos(self):
+        found = [pr("001"), pr("002")]
+        with self.assertLogs("sei-insights", level="INFO") as cm:
+            log_discovered(found, "18/09/2026", "25/09/2026", "MMulheres", "CTI")
+        joined = "\n".join(cm.output)
+        self.assertIn("Pesquisa de 18/09/2026 a 25/09/2026", joined)
+        self.assertIn("órgão MMulheres | unidade CTI", joined)
+        self.assertIn("2 processo(s) encontrado(s)", joined)
+        self.assertIn("1) 001  (url/001)", joined)
+        self.assertIn("2) 002  (url/002)", joined)
+
+    def test_log_summary_lista_quantidades_e_processos(self):
+        rows = [row("001", "Na CTI"), row("002", "Pendente de assinatura")]
+        rows[1].status_coleta = "concluído (cache)"
+        novos = [rows[0]]
+        with self.assertLogs("sei-insights", level="INFO") as cm:
+            log_summary(rows, novos, "18/09/2026", "25/09/2026")
+        joined = "\n".join(cm.output)
+        self.assertIn("Execução concluída (18/09/2026 a 25/09/2026)", joined)
+        self.assertIn("2 processo(s), 1 novo(s)", joined)
+        self.assertIn("1) 001 | Na CTI | concluído", joined)
+        self.assertIn("2) 002 | Pendente de assinatura | concluído (cache)", joined)
+        self.assertIn("status concluído: 1", joined)
+        self.assertIn("status concluído (cache): 1", joined)
+        self.assertIn("situação Na CTI: 1", joined)
+
 
 class ArgParseTest(unittest.TestCase):
     def test_defaults(self):
@@ -155,9 +193,13 @@ class EmptyResultTest(unittest.TestCase):
 
 
 class NowStrTest(unittest.TestCase):
-    def test_formato(self):
+    def test_formato_brasileiro(self):
         import re
-        self.assertRegex(now_str(), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        from datetime import datetime
+        stamp = now_str()
+        self.assertRegex(stamp, r"^\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}$")
+        parsed = datetime.strptime(stamp, "%d/%m/%Y %H:%M:%S")
+        self.assertTrue(parsed.year >= 2020)
 
 
 # PDF mínimo de uma página contendo "Diante do exposto" com camada de texto.

@@ -10,3 +10,5 @@ dist/
 
 # Relatório de status dos planos (não versionado)
 docs/status-implementacao-planos.md
+
+.worktrees/

@@ -133,10 +133,11 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
 
 4. **Árvore de documentos** (`tree.py`): a página pública monta a árvore
    via JavaScript. Para cada documento são lidos a **série documental**
-   (ex.: "Despacho"), o **número documental** (5+ dígitos), a **data**
-   (dd/mm/aaaa, quando presente) e a **posição** na árvore. O nó é
-   correlacionado à URL pública pelo **número documental** (fallback:
-   ordem de renderização).
+   (ex.: "Despacho"), o **número documental** (5+ dígitos), a **data de
+   inclusão** (coluna "Data de Inclusão" da tabela, `dd/mm/aaaa` — a
+   hora:minuto da célula é ignorada; fallback: data no rótulo do nó) e a
+   **posição** na árvore. O nó é correlacionado à URL pública pelo
+   **número documental** (fallback: ordem de renderização).
 
 5. **Último Despacho** (`tree.py`): entre os nós da série "Despacho",
    escolhe o de **maior data** (desempate: maior posição na árvore); sem
@@ -407,6 +408,20 @@ python -m sei_insights --saida relatorios/setembro.xlsx
 > Não pressione ENTER no terminal — o programa continua sozinho assim que
 > o campo é preenchido.
 
+### O que o CLI loga
+
+No `INFO` (padrão), o terminal mostra:
+
+- **o período pesquisado** (`Pesquisa de DD/MM/AAAA a DD/MM/AAAA | órgão ... |
+  unidade ...: N processo(s) encontrado(s)`) seguido da **listagem dos
+  processos encontrados** na busca, com o número e o link;
+- **cada processo consultado** ao longo da análise
+  (`Consultando processo NNNNN.NNNNNN/AAAA-NN`);
+- ao final, **`log_summary`**: a listagem dos processos da planilha
+  (`N) número | situação | status`) e as **quantidades** — total, novos e
+  a quebra por status de coleta (`concluído`, `concluído (cache)`,
+  `erro: ...`) e por situação.
+
 ---
 
 ## O que é gerado
@@ -430,10 +445,10 @@ Cada linha da aba principal (e da aba Novos) corresponde a **um processo**:
 | Coluna | Explicação |
 | ------ | ---------- |
 | `numero` | Número **canônico** do processo (`NNNNN.NNNNNN/AAAA-NN`), lido do cabeçalho da página pública (`Processo:`), normalizado. Mesmo quando a busca descobre o processo via uma linha de documento, aqui vale o número do **processo** — nunca o número do documento. É a chave primária no espelho SQLite. |
-| `data_execucao` | Data/hora (`AAAA-MM-DD HH:MM:SS`) da execução que gravou/atualizou a linha. |
-| `data_ultimo_despacho` | Data do último Despacho da árvore de documentos (`dd/mm/aaaa`), quando presente no DOM. Vazia quando não há despacho público ou a data não foi exibida. |
+| `data_execucao` | Data/hora da execução que gravou/atualizou a linha, no **formato brasileiro** (`DD/MM/AAAA HH:MM:SS`, ex.: `29/09/2026 16:29:44`). |
+| `data_ultimo_despacho` | Data do último Despacho da árvore de documentos, lida da coluna **"Data de Inclusão"** da tabela da página pública (`dd/mm/aaaa`; hora:minuto da célula é ignorado). Vazia quando não há despacho público ou a data não foi exibida. |
 | `situacao` | Situação classificada pelo motor de regras a partir do texto do último Despacho (ex.: "Aguardando providências de X"). Valores especiais: `Sem despacho público`, `Texto não extraível (digitalizado?)`, fallback `Em análise` e `Erro / retry`. |
-| `destino` | Unidade/órgão de destino apontado pelo despacho (a regra pode expandir `\1` dos grupos capturados). Vazia quando a situação não envolve destinatário. |
+| `destino` | **Destinatário citado no cabeçalho do despacho** na primeira linha de destinatário (`Ao/Aos/À/Às <nome>`, ignorando cópia `C/c:` e cortando em `Assunto:`/`Referência:`), mantido **por extenso e exato** (sem o `Ao/Aos/À/Às`); vira **sigla** só quando o **nome inteiro** equivaler a uma chave do mapa `siglas` do `regras.json` (normalização de acentos/hífens) ou quando citado como `(SIGLA)`/após travessão — ex.: `SE`, `CGATI`, `COSIS`, `SGA` vs `Gabinete da Ministra`. Sem cabeçalho de destinatário, é preenchido pela regra do corpo. Vazia quando não envolve destinatário. |
 | `acao_esperada` | Ação pedida pelo despacho (análise, assinatura, retorno, providências, ciência...). Vazia quando não se aplica. |
 | `pendencia_curta` | Resumo de uma linha: **quem está com o processo** e **o que falta**. Vazia quando não há pendência identificada. |
 | `status_coleta` | Como a linha foi produzida: `concluído` (analisado nesta execução, com download quando aplicável), `concluído (cache)` (reaproveitada da execução anterior porque o hash não mudou) ou `erro: <mensagem>` (falha isolada, não interrompe os demais). |
@@ -471,16 +486,32 @@ uma linha de ser gravada.
 O motor (`rules.py`) lê `regras.json` — uma **lista ordenada** de regras.
 Para cada despacho:
 
-1. o texto é **normalizado**: múltiplos espaços/quebras viram um único
-   espaço (`re.sub(r"\s+", " ", text)`);
-2. as regras são testadas **na ordem do arquivo**, com a primeira
+1. o texto é separado em **cabeçalho** e **corpo**. O cabeçalho é o bloco
+   inicial do documento (órgão, `DESPACHO`, `Processo nº`, destinatário
+   `À/Ao/Aos/Às <nome>`); o corpo é o que sobra. Só o **corpo** alimenta as
+   regras de situação/ação — palavras como `Secretaria` no papel timbrado não
+   contaminam mais a classificação (sem linha de destinatário, o bloco inicial
+   do timbrado também é descartado do corpo);
+2. do cabeçalho é lido o **destinatário** (primeira linha `À/Ao/Aos/Às`,
+   ignorando cópia `C/c:` e cortando em `Assunto:`/`C/c`/`Referência:`), mantido
+   **por extenso e exato** (sem o `Aos/Ao/Às/À`); vira **sigla** somente quando o
+   **nome inteiro** equivaler a uma chave do mapa `siglas` do `regras.json` (o
+   nome é normalizado p/ comparação, ignorando acentos e hífens), ou quando a
+   sigla aparece entre parênteses (`(CGATI)`) ou após travessão (`– COSIS`).
+   É **o nome exato** que vale: `Gabinete da Secretaria-Executiva` continua
+   por extenso (não vira `SE`). Sem destinatário, `destino` vem da regra do
+   corpo;
+3. o corpo normalizado (múltiplos espaços/quebras viram um único espaço) é
+   testado contra as regras **na ordem do arquivo**, com a primeira
    correspondência vencendo (`re.search(..., re.IGNORECASE)`, caixa
    indiferente);
-3. a regra vencedora preenche os quatro campos de saída. `destino`,
-   `situacao`, `acao_esperada` e `pendencia_curta` podem usar
-   **backreferences** (`\1`, `\2`...) que são expandidos pelos grupos
-   capturados do padrão;
-4. se **nenhuma** regra casar, vale o **fallback** (padrão: situação
+4. a regra vencedora preenche os quatro campos de saída; `situacao`,
+   `acao_esperada` e `pendencia_curta` podem usar **backreferences**
+   (`\1`, `\2`...) expandidas pelos grupos capturados do padrão;
+5. o `destino` do **cabeçalho** (passo 2) **sobrepõe** o da regra quando
+   existe; mesmo sem regra casando, o destinatário preenche `destino` no
+   **fallback**;
+6. se **nenhuma** regra casar, vale o **fallback** (padrão: situação
    `"Em análise"`).
 
 Cada regra tem a forma:
@@ -532,23 +563,28 @@ vírgula, ponto ou fim do texto) e padrões temáticos sem destino:
 | ----- | ------- | -------- |
 | 6 | "para/aguardando/pendente de **assinatura**" | `Pendente de assinatura` |
 | 7 | "retorno a/aguardando retorno de/retorno para <destino>" | `Aguardando retorno` |
-| 8 | "encaminha-se/remete-se (os autos) a/para <destino>" | `Encaminhado a <destino>` |
-| 9 | "para/com vistas a (ação) de <destino>" | `Aguardando <ação> de <destino>` |
-| 10–11 | "determino/determina-se o arquivamento", "arquive-se", "pelo arquivamento" | `Arquivado` |
-| 12 | "devolva-se/devolvam-se/devolução dos autos" | `Devolvido` |
-| 13 | "converta-se/transforme-se/conversão em (ofício\|nota técnica\|memorial\|termo)" | `Em conversão/transformação` |
-| 14 | "dê-se ciência/cientifique-se/para ciência de <destino>" | `Para ciência de <destino>` |
-| 15 | "adote-se/providencie-se/tomar providências (por) <destino>" | `Aguardando providências de <destino>` |
-| 16 | "no prazo de/em até/prazo de **N** (dias\|horas\|meses)" | `Com prazo (N dias)` |
-| 17 | "\b(defiro\|indefiro\|parcialmente procedente\|improcedente\|procedente)\b" | `Decisão: <termo>` |
-| 18 | "cumpra-se/para cumprimento/determino cumprimento" | `Para cumprimento` |
-| 19 | menção a unidade interna (`SGA`, `CCL`, `CTI`, `SCL`, `SG`, `COORDENAÇÃO`, `DIRETORIA`, `SECRETARIA`, `GERÊNCIA`, `NÚCLEO`, `DEPARTAMENTO`...) | `Em <unidade>` |
-| 20 | órgão externo (`Ministério Público`, `Tribunal de Contas`, `Controladoria`, `Polícia Federal`, `Receita Federal`, `INSS`, `AGU`, `PGFN`, `MPF`, `TCU`, `CGU`...) | `Encaminhado a órgão externo (<órgão>)` |
+| 8 | "encaminha-se/remete-se (os autos) a **<alvo>**, para **<ação>**" (fecho do despacho; ex.: "... à CGATI, para conhecimento e deliberação") | `Encaminhado a <ação>` |
+| 9 | "encaminho o presente processo para <ação> quanto à ..." | `Encaminhado a <ação>` |
+| 10 | "encaminha-se/remete-se (os autos) a/para <destino>" | `Encaminhado a <destino>` |
+| 11 | "para/com vistas a (ação) de <destino>" | `Aguardando <ação> de <destino>` |
+| 12–13 | "determino/determina-se o arquivamento", "arquive-se", "pelo arquivamento" | `Arquivado` |
+| 14 | "devolva-se/devolvam-se/devolução dos autos" | `Devolvido` |
+| 15 | "converta-se/transforme-se/conversão em (ofício\|nota técnica\|memorial\|termo)" | `Em conversão/transformação` |
+| 16 | "dê-se ciência/cientifique-se/para ciência de <destino>" | `Para ciência de <destino>` |
+| 17 | "adote-se/providencie-se/tomar providências (por) <destino>" | `Aguardando providências de <destino>` |
+| 18 | "no prazo de/em até/prazo de **N** (dias\|horas\|meses)" | `Com prazo (N dias)` |
+| 19 | "\b(defiro\|indefiro\|parcialmente procedente\|improcedente\|procedente)\b" | `Decisão: <termo>` |
+| 20 | "cumpra-se/para cumprimento/determino cumprimento" | `Para cumprimento` |
+| 21 | "sugere-se ... seja retomada/retomado ... planejamento" (despacho que propõe retomar em ocasião futura, ex.: resposta a apoio orçamentário) | `Aguardando retomada (avaliação futura)` |
+| 22 | menção a unidade interna (`SGA`, `CCL`, `CTI`, `SCL`, `SG`, `COORDENAÇÃO`, `DIRETORIA`, `SECRETARIA`, `GERÊNCIA`, `NÚCLEO`, `DEPARTAMENTO`...) | `Em <unidade>` |
+| 23 | órgão externo (`Ministério Público`, `Tribunal de Contas`, `Controladoria`, `Polícia Federal`, `Receita Federal`, `INSS`, `AGU`, `PGFN`, `MPF`, `TCU`, `CGU`...) | `Encaminhado a órgão externo (<órgão>)` |
 
 > **Ordem importa.** Por serem avaliadas na ordem do arquivo, regras mais
 > específicas devem vir primeiro. Uma regra genérica que casa quase tudo
 > (ex.: a de órgão externo) fica no fim, para não "roubar" casos que as
-> regras anteriores já teriam classificado melhor.
+> regras anteriores já teriam classificado melhor. As regras 8 e 9
+> (fecho com `para <ação>`) vêm antes da regra 10 genérica e lidam
+> também com quebra de linha na extração do PDF (`en\ncaminho` → `en caminho`).
 >
 > **Ajuste de padrões:** por serem expressões regulares, adicionar/editar
 > uma regra exige cuidado com escapes no JSON. Uma backreference no JSON
@@ -558,10 +594,10 @@ vírgula, ponto ou fim do texto) e padrões temáticos sem destino:
 ### O fallback "Em análise"
 
 Se nenhuma regra casar — texto irrelevante, conteúdo digitalizado sem
-texto útil, formato inesperado — o processo recebe a situação padrão
-**"Em análise"**, com `destino`, `acao_esperada` e `pendencia_curta`
-vazios. Isso impede que um despacho desconhecido "trave" o restante da
-execução: a linha é gravada na planilha mesmo assim.
+texto útil, formato inesperado — a situação padrão é **"Em análise"**.
+O `destino` ainda é preenchido quando o cabeçalho cita o destinatário
+(`À/Ao/Aos/Às <nome>`). Isso impede que um despacho desconhecido "trave" o
+restante da execução: a linha é gravada na planilha mesmo assim.
 
 ---
 
