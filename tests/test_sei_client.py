@@ -7,9 +7,12 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from sei_insights.clients.sei_client import (
     MAX_RETRIES,
+    CriteriosNaoAplicados,
     ProcessResult,
     PublicDocument,
     SeiClient,
+    criterios_faltantes,
+    count_rows,
     extract_process,  # extract_process is a module function below
 )
 
@@ -90,6 +93,113 @@ class _ExpectResponse:
     @property
     def value(self):
         return self.response
+
+
+class CriteriosDaBuscaTest(unittest.TestCase):
+    """A busca só pode começar com TODOS os critérios realmente marcados.
+
+    Sem o id da unidade o SEI não restringe nada e devolve o recorte do órgão
+    inteiro; com órgão/checkbox faltando, o recorte muda. Era degradação
+    silenciosa (só warning). Agora qualquer item faltando impede a busca.
+    """
+
+    UNIDADE = "MMULHERES-SE-SGA-CGATI-CTI"
+
+    def _completo(self, **overrides):
+        estado = {
+            "checkboxes": {"chkSinProcessos": True,
+                           "chkSinDocumentosGerados": True,
+                           "chkSinDocumentosRecebidos": True},
+            "orgao": ["11"],
+            "unidade_id": "110011380",
+            "unidade_texto": self.UNIDADE,
+        }
+        estado.update(overrides)
+        return estado
+
+    def test_tudo_marcado_passa(self):
+        self.assertEqual(criterios_faltantes(self._completo(), "11", self.UNIDADE), [])
+
+    def test_rotulo_completo_da_unidade_passa(self):
+        """O SEI mostra 'código - nome' no autocomplete; deve ser aceito."""
+        estado = self._completo(
+            unidade_texto=f"{self.UNIDADE} - Coordenação de Tecnologia da Informação")
+        self.assertEqual(criterios_faltantes(estado, "11", self.UNIDADE), [])
+
+    def test_unidade_nao_aplicada_e_erro(self):
+        for id_ in ("", "   ", None):
+            with self.subTest(unidade_id=id_):
+                estado = self._completo(unidade_id=id_ or "")
+                faltando = criterios_faltantes(estado, "11", self.UNIDADE)
+                self.assertTrue(faltando)
+                self.assertIn("unidade", " ".join(faltando).lower())
+
+    def test_unidade_divergente_e_erro(self):
+        estado = self._completo(unidade_texto="MMULHERES-SE-SGA-CGATI-CTI-DTI")
+        faltando = criterios_faltantes(estado, "11", self.UNIDADE)
+        self.assertTrue(faltando)
+
+    def test_cada_checkbox_desmarcado_e_erro(self):
+        for nome in ("chkSinProcessos", "chkSinDocumentosGerados",
+                     "chkSinDocumentosRecebidos"):
+            with self.subTest(checkbox=nome):
+                cbs = {"chkSinProcessos": True, "chkSinDocumentosGerados": True,
+                       "chkSinDocumentosRecebidos": True}
+                cbs[nome] = False
+                faltando = criterios_faltantes(self._completo(checkboxes=cbs),
+                                               "11", self.UNIDADE)
+                self.assertEqual(len(faltando), 1)
+                self.assertIn(nome, faltando[0])
+
+    def test_orgao_ausente_e_erro(self):
+        faltando = criterios_faltantes(self._completo(orgao=[]), "11", self.UNIDADE)
+        self.assertTrue(any("rgao" in f or "órgão" in f for f in faltando))
+
+    def test_selecionar_todos_sem_o_orgao_alvo_e_erro(self):
+        """O fallback 'selecionar todos os órgãos' é o que a barra reprova."""
+        faltando = criterios_faltantes(self._completo(orgao=["1", "2", "3"]),
+                                       "11", self.UNIDADE)
+        self.assertTrue(any("órgão" in f for f in faltando))
+
+    def test_orgao_alvo_presente_na_lista_passa(self):
+        self.assertEqual(
+            criterios_faltantes(self._completo(orgao=["1", "2", "11"]),
+                                "11", self.UNIDADE), [])
+
+    def test_orgao_sem_mapeamento_e_erro(self):
+        """Órgão não mapeado não pode virar 'todos os órgãos' silencioso."""
+        faltando = criterios_faltantes(self._completo(), "", self.UNIDADE)
+        self.assertTrue(any("órgão" in f for f in faltando))
+
+    def test_verificacao_levanta_antes_de_buscar(self):
+        class _Page:
+            def evaluate(self, *a, **k):
+                return {"checkboxes": {"chkSinProcessos": True,
+                                       "chkSinDocumentosGerados": True,
+                                       "chkSinDocumentosRecebidos": True},
+                        "orgao": ["11"], "unidade_id": "", "unidade_texto": ""}
+
+        client = SeiClient.__new__(SeiClient)
+        client.page = _Page()
+        client.save_debug = lambda *a, **k: None
+        with self.assertRaises(CriteriosNaoAplicados) as ctx:
+            client._verify_search_criteria("MMULHERES", self.UNIDADE)
+        self.assertIn("unidade", str(ctx.exception).lower())
+
+    def test_verificacao_passa_com_dom_completo(self):
+        class _Page:
+            def evaluate(self, *a, **k):
+                return {"checkboxes": {"chkSinProcessos": True,
+                                       "chkSinDocumentosGerados": True,
+                                       "chkSinDocumentosRecebidos": True},
+                        "orgao": ["11"], "unidade_id": "110011380",
+                        "unidade_texto": self_unidade}
+
+        self_unidade = self.UNIDADE
+        client = SeiClient.__new__(SeiClient)
+        client.page = _Page()
+        client.save_debug = lambda *a, **k: None
+        client._verify_search_criteria("MMULHERES", self.UNIDADE)  # não levanta
 
 
 class _FakePage:
@@ -262,6 +372,28 @@ class PaginationLoopTest(unittest.TestCase):
         self.assertEqual(len(results), 10)
         self.assertEqual(client.fetch_calls, [])
         self.assertEqual(client.captcha_calls, 1)
+
+    def test_pagina_cheia_de_linhas_repetidas_ainda_pagina(self):
+        """Uma página cheia de LINHAS pode conter poucos processos.
+
+        A pesquisa marca processos (P), documentos gerados (G) e documentos
+        recebidos (R): várias linhas são documentos do mesmo processo-pai, e
+        o número se repete. Encerrar o loop pelo número de processos ÚNICOS
+        (22 < 50) faz o coletor achar que acabou na primeira página e nunca
+        pede a segunda — o resultado sai truncado e sem aviso.
+        """
+        distintos = _numbers(0, 22)
+        repetidas = [distintos[i % 22] for i in range(50)]  # 50 linhas, 22 processos
+        first = {"html": _result_rows(repetidas)}
+        segunda = {"html": _result_rows(_numbers(100, 8))}
+        client = _PaginationClient(first, [segunda])
+
+        results = client.search_processes(
+            "MMULHERES", "U", "01/01/2026", "31/03/2026")
+
+        self.assertEqual(client.fetch_calls, [(50, 50)],
+                         "a página 1 veio cheia (50 linhas): deveria paginar")
+        self.assertEqual(len(results), 30, "22 da pág. 1 + 8 da pág. 2")
 
     def test_captcha_resolvido_antes_de_preencher_criterios(self):
         client = _OrderPaginationClient(

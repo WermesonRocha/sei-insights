@@ -27,6 +27,21 @@ def parse_response(data: dict) -> list[str]:
     return seen
 
 
+def count_rows(data: dict) -> int:
+    """Conta as LINHAS de resultado, não os processos únicos.
+
+    A pesquisa marca processos (P), documentos gerados (G) e documentos
+    recebidos (R), e cada linha traz `data-prot` com o processo-pai: várias
+    linhas do mesmo processo repetem o mesmo número. `parse_response` remove
+    essa repetição, então a contagem de processos únicos NÃO serve para saber
+    se a página veio cheia — é isto que define se há próxima página.
+    """
+    html = (data or {}).get("html", "") or ""
+    if not html:
+        return 0
+    return len(BeautifulSoup(html, "html.parser").select("[data-prot]"))
+
+
 def expected_total(data: dict) -> int:
     try:
         return int(data.get("itens") or 0)

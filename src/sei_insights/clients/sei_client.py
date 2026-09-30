@@ -16,6 +16,7 @@ from sei_insights.config import DEFAULT_TIMEOUT_MS
 
 from sei_insights.clients.captcha_solver import CaptchaSolver
 from sei_insights.clients.discovery import (
+    count_rows,
     expected_total,
     extract_process_number,
     is_captcha_error,
@@ -103,6 +104,78 @@ def _is_process_number(value: str) -> bool:
     """
     return bool(re.fullmatch(r"\d{4,5}\.\d{6,8}/\d{4}-\d{2}",
                              normalize_process_number(value)))
+
+
+class CriteriosNaoAplicados(RuntimeError):
+    """A busca foi impedida porque algum critério não ficou marcado."""
+
+
+# Os três tipos que a pesquisa pública cobre. Sem qualquer um deles o SEI
+# devolve um recorte diferente do pedido.
+CRITERIOS_OBRIGATORIOS = (
+    "chkSinProcessos",
+    "chkSinDocumentosGerados",
+    "chkSinDocumentosRecebidos",
+)
+
+
+def criterios_faltantes(estado: dict, orgao_esperado: str,
+                        unidade: str) -> list[str]:
+    """Lista o que NÃO ficou marcado. Lista vazia = a busca pode começar.
+
+    `estado` é o que o DOM mostra depois de preencher o formulário:
+    `checkboxes` (nome -> marcado), `orgao` (valores selecionados),
+    `unidade_id` (#hdnIdUnidade) e `unidade_texto` (#txtUnidade).
+
+    O id da unidade é o que o SEI usa para filtrar (spike:111): vazio, a
+    busca sai sem restrição de unidade e devolve o órgão inteiro, o que é
+    pior que não devolver nada — parece resultado e não é.
+    """
+    faltando: list[str] = []
+
+    for nome, marcado in (estado.get("checkboxes") or {}).items():
+        if not marcado:
+            faltando.append(f"checkbox {nome} desmarcado")
+    if len((estado.get("checkboxes") or {})) < len(CRITERIOS_OBRIGATORIOS):
+        faltando.append("um ou mais checkboxes de tipo de pesquisa ausentes")
+
+    if not orgao_esperado:
+        faltando.append(
+            "órgão sem valor em ORGAO_VALUES — não é possível confirmar a seleção"
+        )
+    elif str(orgao_esperado) not in {str(v) for v in (estado.get("orgao") or [])}:
+        faltando.append(f"órgão {orgao_esperado} não está selecionado")
+
+    if not str(estado.get("unidade_id") or "").strip():
+        faltando.append(
+            "unidade geradora não aplicada (#hdnIdUnidade vazio: a busca "
+            "rodaria sem filtro de unidade)"
+        )
+    elif not _unidade_confere(
+            _normalize_unidade_label(str(estado.get("unidade_texto") or "")),
+            _normalize_unidade_label(unidade),
+    ):
+        faltando.append(
+            f"unidade no formulário é {estado.get('unidade_texto')!r}, "
+            f"esperada {unidade!r}"
+        )
+
+    return faltando
+
+
+def _unidade_confere(candidate: str, wanted: str) -> bool:
+    """Compara o CÓDIGO da unidade de forma estrita.
+
+    `_unidade_matches` (usada no autocomplete) aceita substring, e aí
+    `MMULHERES-SE-SGA-CGATI-CTI-DTI` casa com `...-CTI`: a unidade legada
+    passaria pela verificação e a busca voltaria 0 processos sem erro nenhum.
+    O SEI exibe "código - nome", então o código é a parte antes do " - ".
+    """
+    if not candidate or not wanted:
+        return False
+    codigo = " ".join(candidate.split(" - ")[0].split())
+    alvo = " ".join(wanted.split(" - ")[0].split())
+    return codigo == alvo
 
 
 @dataclass(slots=True)
@@ -500,6 +573,67 @@ class SeiClient:
         if not found:
             logger.warning("Campo %s não encontrado.", name)
 
+    def _verify_search_criteria(self, orgao: str, unidade: str) -> None:
+        """Impede a busca se algum critério não ficou marcado de fato.
+
+        Os caminhos de preenchimento degradavam em silêncio (órgão não
+        mapeado -> todos os órgãos; unidade não resolvida -> segue sem
+        filtro). Cada degradação muda o recorte do resultado sem gerar erro,
+        e uma busca sem unidade parece uma busca completa. Aqui o que vale é
+        o DOM, não a intenção: se não dá para ler marked, a busca não sai.
+        """
+        estado = self.page.evaluate(
+            """(names) => {
+                const out = {checkboxes: {}, orgao: [],
+                             unidade_id: '', unidade_texto: ''};
+                for (const n of names) {
+                    const el = document.getElementById(n)
+                        || document.querySelector(
+                            "input[name='" + n + "']");
+                    out.checkboxes[n] = !!(el && el.checked);
+                }
+                const sel = document.getElementById('selOrgaoPesquisa');
+                if (sel) {
+                    if (sel.multipleSelect
+                        && typeof sel.multipleSelect === 'function') {
+                        out.orgao = sel.multipleSelect('getSelects') || [];
+                    } else if (sel.selectedOptions) {
+                        out.orgao = Array.from(sel.selectedOptions)
+                            .map((o) => o.value);
+                    } else if (sel.value) {
+                        out.orgao = [sel.value];
+                    }
+                }
+                const hdn = document.getElementById('hdnIdUnidade');
+                const txt = document.getElementById('txtUnidade');
+                out.unidade_id = (hdn && hdn.value || '').trim();
+                out.unidade_texto = (txt && txt.value || '').trim();
+                return out;
+            }""",
+            list(CRITERIOS_OBRIGATORIOS),
+        )
+
+        faltando = criterios_faltantes(
+            estado, ORGAO_VALUES.get(orgao.strip().upper(), ""), unidade,
+        )
+        if not faltando:
+            logger.info(
+                "Critérios confirmados no formulário: órgão %s, unidade %r, "
+                "P+G+R marcados.", orgao, unidade,
+            )
+            return
+
+        self.save_debug("criterios_incompletos")
+        raise CriteriosNaoAplicados(
+            "A busca NÃO foi feita: o SEI não ficou com todos os critérios "
+            "necessários. Sem isso o resultado seria de outro recorte "
+            "(com a unidade vazia, o SEI devolve o órgão inteiro).\n"
+            "Faltou:\n  - " + "\n  - ".join(faltando) + "\n"
+            f"Esperado: órgão {orgao!r}, unidade {unidade!r} e os três tipos "
+            "de pesquisa (Processos, Documentos Gerados, Documentos "
+            "Recebidos). Verifique .state/debug/criterios_incompletos.*"
+        )
+
     def _set_search_criteria(self, orgao: str, unidade: str,
                              inicio: str, fim: str) -> None:
         """Define critérios de pesquisa per spike (docs/spike-2026-09-22.md).
@@ -606,6 +740,11 @@ class SeiClient:
                 f.first.fill(field_value)
             else:
                 logger.warning("Campo de data %s não encontrado.", field)
+
+        # Barreira: só a busca em si decide se os critérios pegaram. Fica no
+        # fim de propósito — cobre todos os caminhos de degradação acima sem
+        # espalhar raise por cada um deles.
+        self._verify_search_criteria(orgao, unidade)
 
     def _fetch_page(self, inicio: int, page_size: int) -> dict:
         """Busca uma página de resultados via POST AJAX (pagination)."""
@@ -920,18 +1059,25 @@ class SeiClient:
             self._add_result(results, number, data)
 
         page = page_size
+        pages = 1
 
-        # Contrato real do SEI (spike:100,126,212): a resposta AJAX traz
-        # apenas {"html": ...}, sem campo itens, então expected_total é 0.
-        # Paginamos enquanto a última página devolveu uma página cheia;
-        # paramos na primeira página curta ou vazia. expected_total serve
-        # só como limite adicional quando itens existe e o safety valve
-        # evita paginação infinita.
-        while len(page_numbers) == page_size:
+        # O tamanho da página do SEI conta LINHAS, não processos: a pesquisa
+        # marca P+G+R, e documentos do mesmo processo repetem o número na
+        # página. Encerrar pelo total de processos únicos (22 vindos de uma
+        # página de 50 linhas) truncava a busca na primeira página sem aviso.
+        rows = count_rows(data)
+        while rows >= page_size:
             page_data = self._fetch_page_with_captcha_retry(page, page_size)
+            rows = count_rows(page_data)
             page_numbers = parse_response(page_data)
             if not page_numbers:
+                logger.warning(
+                    "A página %d voltou sem processos e a busca parou aqui. "
+                    "Se o SEI tem mais resultados, a coleta ficou truncada.",
+                    pages + 1,
+                )
                 break
+            pages += 1
             for number in page_numbers:
                 self._add_result(results, number, page_data)
             total_known = expected_total(page_data)
@@ -941,6 +1087,10 @@ class SeiClient:
             if page > page_size * 50:  # safety valve
                 break
 
+        logger.info(
+            "Busca concluída: %d página(s) lida(s), %d processo(s) único(s).",
+            pages, len(results),
+        )
         return list(results.values())
 
     def _fetch_page_with_captcha_retry(self, inicio: int, page_size: int) -> dict:

@@ -126,6 +126,18 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    (`rowsSolr=50`). Páginas seguintes avançam o parâmetro `inicio`; como
    no SEI, cada página pode exigir um novo CAPTCHA.
 
+   **O fim da paginação é decidido por LINHAS, não por processos.** Como os
+   três tipos de pesquisa estão marcados, uma página cheia de 50 linhas pode
+   conter bem menos processos: documentos do mesmo processo repetem o número
+   nas linhas seguintes. Encerrar o laço comparando o total de processos
+   **únicos** com 50 fazia uma página de 50 linhas com 22 processos parecer
+   a última — o coletor parava na primeira página e devolvia 22 processos
+   sem nenhum aviso (bug real, período 01/01/2026 a 31/03/2026). Hoje o
+   laço conta as linhas (`count_rows`) e só termina numa página curta ou
+   vazia. Cada execução registra `Busca concluída: N página(s) lida(s), M
+   processo(s) único(s)`, e uma página que volta vazia no meio gera aviso
+   em vez de truncar calado.
+
    **CAPTCHA rejeitado não é "sem resultados".** Quando o OCR erra o código,
    o SEI **não** responde 4xx: responde **HTTP 200** com o HTML de erro
    dentro de `.sem-resultado` (`Código de confirmação inválido 1.`). Como
@@ -137,6 +149,30 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    a execução **falha com erro explícito** em vez de mentir que o período
    não tem processos. Uma busca legitimamente vazia ("Nenhum documento
    localizado.") continua sendo zero, sem retry.
+
+   **A busca só sai com todos os critérios marcados.** Preencher o
+   formulário não é o mesmo que tê-lo aplicado: o `#hdnIdUnidade` só recebe
+   o id quando uma opção do autocomplete é clicada, e o plugin de órgãos
+   pode não aceitar a seleção. Antes, cada falha degradava em silêncio —
+   órgão não mapeado virava *todos os órgãos*, unidade não resolvida deixava
+   a busca **sem filtro de unidade** (o SEI devolvia o recorte do órgão
+   inteiro, que parece um resultado completo e não é). Agora
+   `_verify_search_criteria` lê o DOM e **impede a busca** se faltar
+   qualquer um destes:
+   - os três checkboxes `chkSinProcessos`, `chkSinDocumentosGerados` e
+     `chkSinDocumentosRecebidos`;
+   - o órgão alvo selecionado em `#selOrgaoPesquisa` (`MMULHERES` → `11`);
+   - o id da unidade em `#hdnIdUnidade` **e** o código confere em
+     `#txtUnidade`.
+
+   A comparação da unidade é **estrita** (`_unidade_confere`), aceitando o
+   formato "código - nome" do SEI
+   (`MMULHERES-SE-SGA-CGATI-CTI - Coordenação de Tecnologia da
+   Information` → código `MMULHERES-SE-SGA-CGATI-CTI`). A comparação por
+   substring usada no autocomplete aceitaria a unidade legada
+   `...-CGATI-CTI-DTI` como se fosse a pedida, e a busca voltaria 0
+   processos sem erro. A falha guarda a página em
+   `.state/debug/criterios_incompletos.*` e lista o que faltou.
 
 3. **Navegação ao processo** (`sei_client.py`): segue o link público
    `md_pesq_processo_exibir.php` fornecido pelo próprio resultado da
