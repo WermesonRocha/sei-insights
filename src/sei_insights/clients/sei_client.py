@@ -1058,7 +1058,6 @@ class SeiClient:
         for number in page_numbers:
             self._add_result(results, number, data)
 
-        page = page_size
         pages = 1
 
         # `data.itens` é o TOTAL de linhas que o SEI encontrou, e é o campo
@@ -1078,22 +1077,29 @@ class SeiClient:
             "SEI informou %d resultado(s) no total; a primeira página trouxe %d linha(s).",
             total, rows,
         )
+        # O próximo offset avança pelas LINHAS realmente lidas, nunca por
+        # `page_size`. Uma página pode vir curta (47 linhas de 50) e um salto
+        # fixo de 50 pularia as linhas de offset 47..49 para sempre — no caso
+        # real de 01/01/2026 a 31/03/2026 foram 180 linhas lidas contra 183
+        # informadas. Somando o tamanho real da página anterior, nenhum
+        # offset é pulado, e a página cheia continua avançando 50 como antes.
+        page = rows
         while rows and (page < total if total > 0 else rows >= page_size):
             page_data = self._fetch_page_with_captcha_retry(page, page_size)
             rows = count_rows(page_data)
             page_numbers = parse_response(page_data)
             if not page_numbers:
                 logger.warning(
-                    "A página %d voltou sem processos e a busca parou aqui "
-                    "(offset %d de %d). Se o SEI tem mais resultados, a coleta "
-                    "ficou truncada.",
-                    pages + 1, page, total or -1,
+                    "A página que começava no offset %d voltou sem processos e a "
+                    "busca parou aqui (de %d linhas informadas). Se o SEI tem mais "
+                    "resultados, a coleta ficou truncada.",
+                    page, total or -1,
                 )
                 break
             pages += 1
             for number in page_numbers:
                 self._add_result(results, number, page_data)
-            page += page_size
+            page += rows
             if page > page_size * 50:  # safety valve
                 break
 

@@ -91,6 +91,8 @@ O fluxo de execução é o seguinte:
 busca por unidade + período (+ 3 tipos de pesquisa marcados)
   → linhas de resultado (processos E documentos — 1 linha por documento)
   → dedupe pela URL do processo → 1 resultado por processo
+    (o "total" do SEI conta LINHAS: processos E documentos — por isso
+     183 linhas podem virar 67 processos; ver "Como funciona")
   → número canônico do processo (cabeçalho "Processo:" da página pública)
   → diff com o espelho anterior (SQLite) → "novos"
   → para cada processo:
@@ -122,6 +124,34 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    colapsam em um único resultado. Sem isso, um processo descoberto por
    N documentos era visitado e baixado N vezes (bug real).
 
+   > **Por que o SEI informa 183 e a planilha tem 67 processos?**
+   >
+   > São grandezas diferentes, e a diferença **não** é perda de coleta.
+   >
+   > - **183** é o total de **linhas** que o SEI casou (`data.itens`);
+   > - **67** é o total de **processos únicos** depois da dedupe.
+   >
+   > Como a pesquisa marca **Processos + Documentos Gerados + Documentos
+   > Recebidos**, cada linha é um *item* encontrado, e vários itens podem
+   > pertencer ao **mesmo processo-pai**. Um processo com três documentos
+   > na árvore pode gerar três linhas apontando para a mesma página dele.
+   >
+   > Medido em 01/01/2026 a 31/03/2026: 183 linhas para 67 processos, uma
+   > média de **2,73 linhas por processo**. Os 67 processos são o total
+   > real; o número 183 descreve o volume de itens, não o de processos.
+   >
+   > Por isso o log das duas grandezas separadamente:
+   >
+   > ```
+   > SEI informou 183 resultado(s) no total; a primeira página trouxe 47 linha(s).
+   > Busca concluída: 4 página(s) lida(s), 67 processo(s) único(s).
+   > ```
+   >
+   > Um processo **nunca** some por isso: ele pode ter sido descoberto por
+   > qualquer uma das suas linhas (o próprio processo, um documento gerado
+   > ou um recebido) e, uma vez descoberto, a página do processo é
+   > consolidada em **uma** linha da planilha.
+
 2. **Paginação**: o módulo devolve até 50 resultados por página
    (`rowsSolr=50`). Páginas seguintes avançam o parâmetro `inicio`; como
    no SEI, cada página pode exigir um novo CAPTCHA.
@@ -132,11 +162,40 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    nas linhas seguintes. Encerrar o laço comparando o total de processos
    **únicos** com 50 fazia uma página de 50 linhas com 22 processos parecer
    a última — o coletor parava na primeira página e devolvia 22 processos
-   sem nenhum aviso (bug real, período 01/01/2026 a 31/03/2026). Hoje o
-   laço conta as linhas (`count_rows`) e só termina numa página curta ou
-   vazia. Cada execução registra `Busca concluída: N página(s) lida(s), M
-   processo(s) único(s)`, e uma página que volta vazia no meio gera aviso
-   em vez de truncar calado.
+   sem nenhum aviso (bug real, período 01/01/2026 a 31/03/2026).
+
+   **O total do SEI é a régua, e ele vem em `data.itens`.** O JS da própria
+   página de pesquisa é a autoridade do contrato:
+
+   ```js
+   var buscaInicio = 0; var rowsSolr = 50; var qtdeItens = 0;
+   qtdeItens = data.itens;
+   function verificarRegistros(){
+       var totalTela = $('table tbody tr.pesquisaTituloRegistro').length;
+       if(totalTela < 10 && buscaInicio < qtdeItens){ carregarProximaPaginaInicial(); }
+   }
+   ```
+
+   Enquanto `inicio < itens`, há página para buscar. Uma documentação
+   anterior afirmava que o JSON **não** trazia total e que o fim era
+   "página curta" — conclusão tirada de uma resposta de **CAPTCHA
+   rejeitado**, que de fato é só `{"html": ...}` sem `itens`. No sucesso o
+   campo existe, e é ele que manda. Sem `itens` (CASO de CAPTCHA
+   rejeitado) o laço ainda cai no critério antigo de página cheia.
+
+   **O offset avança pelas linhas lidas, nunca por `page_size`.** Uma
+   página pode vir curta — no caso real, a primeira trouxe 47 linhas de 50
+   — e somar `50` ao offset pularia para sempre as linhas de posição 47,
+   48 e 49. Isso dava 180 linhas lidas contra 183 informadas (bug real,
+   mesma execução). Somando o **tamanho real da página anterior**, nenhum
+   offset é pulado: as 4 páginas passaram a ser `47 + 50 + 50 + 36 = 183`,
+   com sobreposição zero. Uma página cheia continua avançando 50, então o
+   caso comum não muda.
+
+   Cada execução registra `Busca concluída: N página(s) lida(s), M
+   processo(s) único(s)`, e uma página que volta vazia no meio — ou a
+   busca terminando com `inicio < itens` — gera aviso em vez de truncar
+   calado.
 
    **CAPTCHA rejeitado não é "sem resultados".** Quando o OCR erra o código,
    o SEI **não** responde 4xx: responde **HTTP 200** com o HTML de erro
@@ -168,7 +227,7 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    A comparação da unidade é **estrita** (`_unidade_confere`), aceitando o
    formato "código - nome" do SEI
    (`MMULHERES-SE-SGA-CGATI-CTI - Coordenação de Tecnologia da
-   Information` → código `MMULHERES-SE-SGA-CGATI-CTI`). A comparação por
+   Informação` → código `MMULHERES-SE-SGA-CGATI-CTI`). A comparação por
    substring usada no autocomplete aceitaria a unidade legada
    `...-CGATI-CTI-DTI` como se fosse a pedida, e a busca voltaria 0
    processos sem erro. A falha guarda a página em

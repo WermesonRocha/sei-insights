@@ -422,6 +422,27 @@ class PaginationLoopTest(unittest.TestCase):
                          "a página 1 veio cheia (50 linhas): deveria paginar")
         self.assertEqual(len(results), 30, "22 da pág. 1 + 8 da pág. 2")
 
+    def test_pagina_curta_nao_pula_linhas(self):
+        """Página curta faz o próximo offset pular linhas.
+
+        Caso real (01/01/2026 a 31/03/2026): o SEI informou 183 e a primeira
+        página veio com 47 linhas. Como o offset seguinte somava `page_size`
+        (50) em vez das 47 linhas lidas, as linhas de offset 47, 48 e 49
+        nunca eram pedidas — 180 linhas lidas contra 183 informadas.
+        """
+        primeira = {"html": _result_rows(_numbers(0, 47)), "itens": 183}
+        segunda = {"html": _result_rows(_numbers(47, 50)), "itens": 183}
+        terceira = {"html": _result_rows(_numbers(97, 50)), "itens": 183}
+        quarta = {"html": _result_rows(_numbers(147, 36)), "itens": 183}
+        client = _PaginationClient(primeira, [segunda, terceira, quarta])
+
+        client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
+
+        self.assertEqual(
+            client.fetch_calls, [(47, 50), (97, 50), (147, 50)],
+            "o offset deve avançar pelas linhas realmente lidas, não por page_size",
+        )
+
     def test_pagina_ate_o_total_informado_pelo_sei(self):
         """`data.itens` é o total do servidor e manda na paginação.
 
@@ -431,15 +452,15 @@ class PaginationLoopTest(unittest.TestCase):
         mais resultado: encerrar em "página curta" truncava a busca.
         """
         primeira = {"html": _result_rows(_numbers(0, 20)), "itens": 120}
-        segunda = {"html": _result_rows(_numbers(50, 50)), "itens": 120}
-        terceira = {"html": _result_rows(_numbers(100, 20)), "itens": 120}
+        segunda = {"html": _result_rows(_numbers(20, 50)), "itens": 120}
+        terceira = {"html": _result_rows(_numbers(70, 50)), "itens": 120}
         client = _PaginationClient(primeira, [segunda, terceira])
 
         results = client.search_processes(
             "MMULHERES", "U", "01/01/2026", "31/03/2026")
 
-        self.assertEqual(client.fetch_calls, [(50, 50), (100, 50)])
-        self.assertEqual(len(results), 90)  # 20 + 50 + 20
+        self.assertEqual(client.fetch_calls, [(20, 50), (70, 50)])
+        self.assertEqual(len(results), 120)  # 20 + 50 + 50 = o total do SEI
 
     def test_total_zerado_cai_no_comportamento_antigo(self):
         """Sem `itens` (formato de CAPTCHA rejeitado) mantém o critério antigo."""
