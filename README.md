@@ -463,7 +463,7 @@ Cada linha da aba principal corresponde a **um processo**:
 | `numero` | Número **canônico** do processo (`NNNNN.NNNNNN/AAAA-NN`), lido do cabeçalho da página pública (`Processo:`), normalizado. Mesmo quando a busca descobre o processo via uma linha de documento, aqui vale o número do **processo** — nunca o número do documento. É a chave primária no espelho SQLite. |
 | `data_ultimo_despacho` | Data do último Despacho da árvore de documentos, lida da coluna **"Data de Inclusão"** da tabela da página pública (`dd/mm/aaaa`; hora:minuto da célula é ignorado). Vazia quando não há despacho público ou a data não foi exibida. |
 | `situacao` | Situação classificada pelo motor de regras a partir do texto do último Despacho (ex.: "Aguardando providências de X", "Em CGATI"). Valores especiais: `Sem despacho público`, `Texto não extraível (digitalizado?)`, fallback `Em análise` e `Erro / retry`. |
-| `destino` | **Destinatário citado no cabeçalho do despacho** na primeira linha de destinatário (`Ao/Aos/À/Às <nome>`, ignorando cópia `C/c:` e cortando em `Assunto:`/`Referência:`), mantido **por extenso e exato** (sem o `Ao/Aos/À/Às`); vira **sigla** só quando o **nome inteiro** equivaler a uma chave do mapa `siglas` do `regras.json` (normalização de acentos/hífens) ou quando citado como `(SIGLA)`/após travessão — ex.: `SE`, `CGATI`, `COSIS`, `SGA` vs `Gabinete da Ministra`. Sem cabeçalho de destinatário, é preenchido pela regra do corpo. Vazio quando não envolve destinatário. |
+| `destino` | **Destinatário citado no cabeçalho do despacho** (`Ao/Aos/À/Às <nome>`, ignorando cópia `C/c:` e cortando em `Assunto:`/`Referência:`), ou no campo `Destino:` quando presente. Mantido **por extenso e exato** (sem o `Ao/Aos/À/Às`); vira **sigla** quando o **nome inteiro** equivaler a uma chave do mapa `siglas` do `regras.json` (normalização de acentos/hífens), quando citado como `(SIGLA)`/após travessão, ou quando vem com o código de memória do SEI no fim (`... - CGTI/MMULHERES` → `CGTI`) — ex.: `SE`, `CGATI`, `COSIS`, `SGA`, `CGTI` vs `Gabinete da Ministra`. Vários destinatários ficam na mesma célula separados por `"; "`, com a sigla reduzida um a um (ex.: `CPSG; CCL`). Sem cabeçalho de destinatário, é preenchido pela regra do corpo. Vazio quando não envolve destinatário. |
 | `acao_esperada` | Ação pedida pelo despacho (análise, assinatura, retorno, providências, ciência...). Vazia quando não se aplica. |
 | `pendencia_curta` | Resumo de uma linha: **quem está com o processo** e **o que falta**. Vazia quando não há pendência identificada. |
 | `status_coleta` | Como a linha foi produzida: `concluído` (analisado nesta execução, com download quando aplicável), `concluído (cache)` (reaproveitada da execução anterior porque o hash não mudou) ou `erro: <mensagem>` (falha isolada, não interrompe os demais). |
@@ -533,17 +533,24 @@ Para cada despacho:
    1. o campo **`Destino:`** que alguns despachos trazem impresso
       (`Destino: Assessoria Especial de Comunicação Social - ASCOM`) —
       o processo `21260.000680/2025-37` é endereçado só por ele;
-   2. a primeira linha **`À/Ao/Aos/Às <nome>`**, ignorando cópia `C/c:`
-      e cortando em `Assunto:`/`C/c`/`Referência:`/`Processo nº`;
+   2. as linhas **`À/Ao/Aos/Às <nome>`** do cabeçalho, ignorando cópia
+      `C/c:` e cortando em `Assunto:`/`C/c`/`Referência:`/`Processo nº`.
+      Um despacho pode endereçar **mais de uma unidade**: cada linha vira um
+      destinatário, e eles ficam na mesma célula separados por `"; "` (sem
+      `À` nem `Assunto` no meio). A redução de sigla é feita **por
+      destinatário** — no processo `21260.001018/2026-85` são duas
+      unidades, `CPSG` e `CCL`, e as duas aparecem;
    3. sem os dois, não há destinatário no cabeçalho (o timbrado é
-      descartado). O nome é mantido **por extenso e exato** (sem o
-      `Aos/Ao/Às/À`); vira **sigla** somente quando o **nome inteiro**
-      equivaler a uma chave do mapa `siglas` do `regras.json` (o nome é
-      normalizado p/ comparação, ignorando acentos e hífens), ou quando a
-      sigla aparece entre parênteses (`(CGATI)`) ou após travessão
-      (`– COSIS`). É **o nome exato** que vale: `Gabinete da
-      Secretaria-Executiva` continua por extenso (não vira `SE`). Sem
-      destinatário, `destino` vem da regra do corpo;
+      descartado). Cada nome é mantido **por extenso e exato** (sem o
+      `Aos/Ao/Às/À`); vira **sigla** quando o **nome inteiro** equalingue
+      a uma chave do mapa `siglas` do `regras.json` (comparação normalizada,
+      ignorando acentos e hífens), quando a sigla aparece entre parênteses
+      (`(CGATI)`) ou após travessão (`– COSIS`), ou quando o nome por
+      extenso vem com o código de memória do SEI no fim
+      (`Coordenação-Geral de Tecnologia da Informação - CGTI/MMULHERES`,
+      processo `21260.001552/2026-91` → `CGTI`). É **o nome exato** que
+      vale: `Gabinete da Secretaria-Executiva` continua por extenso (não
+      vira `SE`). Sem destinatário, `destino` vem da regra do corpo;
 3. o corpo normalizado (múltiplos espaços/quebras viram um único espaço) é
    testado contra as regras **na ordem do arquivo**, com a primeira
    correspondência vencendo (`re.search(..., re.IGNORECASE)`, caixa

@@ -48,6 +48,8 @@ _SIGNATURE_START = re.compile(
 )
 _DESTINO_PLACEHOLDER = "{destino}"
 DESTINO_DESCONHECIDO = "(destino não identificado)"
+# separador dos destinatários quando o cabeçalho endereça mais de uma unidade
+DESTINATARIOS_SEP = "; "
 _LETTERHEAD_LINE = re.compile(
     r"^(?:MINIST[ÉE]RIO|SECRETARIA|SUBSECRETARIA|DIRETORIA|COORDENA[ÇC][ÃA]O|"
     r"GABINETE|ASSESSORIA|DIVIS[ÃA]O|N[ÚU]CLEO|DEPARTAMENTO|"
@@ -93,7 +95,11 @@ def _recipient_from_paragraph(para: str) -> str:
         r"\b(?:C/c|Cc|Assunto|Refer[êe]ncia)\s*[:.]", resto,
         maxsplit=1, flags=re.IGNORECASE,
     )[0]
-    return _trim_trailing_labels(resto)
+    # Despachos com mais de um destinatário trazem várias linhas `À ...`;
+    # sem esta quebra elas viravam uma frase só, com os `À` do meio e o
+    # assunto grudados no destino (regressão 12804.000730/2026-75).
+    partes = [_trim_trailing_labels(p) for p in _RECIPIENT_LINE.split(resto)]
+    return DESTINATARIOS_SEP.join(p for p in partes if p)
 
 
 def _split_body(text: str) -> tuple[str, str]:
@@ -163,14 +169,31 @@ class RulesEngine:
         with path.open(encoding="utf-8") as fh:
             return cls(json.load(fh))
 
+    def _sigla_por_nome_inteiro(self, nome: str) -> str:
+        """Sigla do mapa `siglas` para o nome INTEIRO (comparação normalizada)."""
+        low = _fold(nome)
+        for chave, sigla in self.siglas.items():
+            if low == _fold(chave):
+                return sigla
+        return ""
+
     def normalize_recipient(self, recip: str) -> str:
         """Reduz o destinatário a sigla conhecida (equivalência do nome inteiro
         com o mapa), a uma sigla citada como '(SIGLA)' ou após travessão, ou
         mantém o nome por extenso. 'Gabinete da Secretaria-Executiva' NÃO vira
         SE porque o nome inteiro não casa com o mapa."""
-        low = _fold(recip)
-        for nome, sigla in self.siglas.items():
-            if low == _fold(nome):
+        sigla = self._sigla_por_nome_inteiro(recip)
+        if sigla:
+            return sigla
+        # Nome por extenso + código de memória do SEI
+        # ("Coordenação-Geral de Tecnologia da Informação - CGTI/MMULHERES",
+        # regressão 21260.001552/2026-91): o `/MMULHERES` quebra a igualdade
+        # do nome inteiro e a sigla deixa de estar no fim da linha. Descarta
+        # o sufixo e compara o nome de novo, sem inventar sigla.
+        base = re.sub(r"\s+[–-]\s+.*$", "", recip).strip()
+        if base and base != recip:
+            sigla = self._sigla_por_nome_inteiro(base)
+            if sigla:
                 return sigla
         m = re.search(r"\(\s*([A-ZÀ-Ÿ]{2,})\s*\)", recip)
         if m:
@@ -180,9 +203,22 @@ class RulesEngine:
             return m.group(1)
         return recip
 
+    def normalize_recipients(self, recipient: str) -> str:
+        """Aplica `normalize_recipient` a CADA destinatário e reagrupa.
+
+        Um cabeçalho pode endereçar mais de uma unidade (regressão
+        21260.001018/2026-85: "... Gerais - CPSG" e "... Logística - CCL").
+        Reduzir a célula inteira faria o corte de sufixo pegar o segundo
+        destinatário e o primeiro sumir da linha.
+        """
+        if not recipient:
+            return ""
+        partes = (self.normalize_recipient(p) for p in recipient.split(DESTINATARIOS_SEP))
+        return DESTINATARIOS_SEP.join(p for p in partes if p)
+
     def classify(self, text: str) -> RuleResult:
         recipient, body = _split_body(text)
-        destino_cabecalho = self.normalize_recipient(recipient) if recipient else ""
+        destino_cabecalho = self.normalize_recipients(recipient)
         normalized = re.sub(r"\s+", " ", body).strip()
         result = RuleResult(**self.fallback)
         for rule in self.rules:

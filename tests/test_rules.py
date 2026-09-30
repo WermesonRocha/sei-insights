@@ -407,6 +407,142 @@ class CampoDestinoTest(unittest.TestCase):
         self.assertNotIn("Quem é Quem", r.destino)
 
 
+class SufixoDeReferenciaTest(unittest.TestCase):
+    """Nome da unidade por extenso + sufixo de referência do SEI.
+
+    Regressão 21260.001552/2026-91: o cabeçalho escreve
+    `À Coordenação-Geral de Tecnologia da Informação - CGTI/MMULHERES`.
+    A redução por mapa exigia o nome INTEIRO, e a extração por travessão
+    exigia a sigla no fim da linha — o `/MMULHERES` (código de memória do
+    SEI) quebrava as duas, e o destino saía com o nome inteiro.
+    """
+
+    ENGINE = RulesEngine.from_file(Path("regras.json"))
+
+    def test_extenso_com_codigo_de_memoria_vira_sigla(self):
+        self.assertEqual(
+            self.ENGINE.normalize_recipient(
+                "Coordenação-Geral de Tecnologia da Informação - CGTI/MMULHERES"
+            ),
+            "CGTI",
+        )
+
+    def test_classify_do_21260_001552(self):
+        r = self.ENGINE.classify(DESPACHO_001552)
+        self.assertEqual(r.destino, "CGTI")
+        self.assertNotIn("CGTI/MMULHERES", r.situacao)
+
+    def test_extenso_com_sigla_apos_travessao_continua_valendo(self):
+        """A regra que já existia (sigla solta após travessão) não pode
+        regredir: aqui o nome nem está no mapa."""
+        self.assertEqual(
+            self.ENGINE.normalize_recipient("Unidade de Convênios - UC"), "UC"
+        )
+
+    def test_sem_mapa_e_sem_sigla_mantem_o_nome_inteiro(self):
+        """Nada é inventado: sem chave no mapa e sem sigla no fim, o nome
+        por extenso é preservado."""
+        self.assertEqual(
+            self.ENGINE.normalize_recipient(
+                "Diretoria de Proteção de Direitos - algo"
+            ),
+            "Diretoria de Proteção de Direitos - algo",
+        )
+
+
+class VariosDestinatariosTest(unittest.TestCase):
+    """Despacho com mais de um destinatário no cabeçalho.
+
+    Regressão 12804.000730/2026-75: o cabeçalho traz três linhas `À ...`.
+    O motor pegava a primeira e arrastava as outras junto, produzindo um
+    destino só, com os `À` do meio e a palavra "Assunto" grudados.
+    """
+
+    ENGINE = RulesEngine.from_file(Path("regras.json"))
+
+    def test_destinatarios_ficam_separados_na_mesma_celula(self):
+        r = self.ENGINE.classify(DESPACHO_71163039)
+        self.assertEqual(
+            r.destino,
+            "Diretoria de Proteção de Direitos; "
+            "Coordenação-Geral de Prevenção à Violência contra Mulheres; "
+            "Unidade de Convênios",
+        )
+
+    def test_nenhum_ai_ou_assunto_sobra_no_destino(self):
+        r = self.ENGINE.classify(DESPACHO_71163039)
+        self.assertNotIn("À ", r.destino)
+        self.assertNotIn("Assunto", r.destino)
+        self.assertNotIn("Realização de espelho", r.destino)
+
+    def test_situacao_continua_vencendo_pelas_regras(self):
+        r = self.ENGINE.classify(DESPACHO_71163039)
+        self.assertEqual(r.situacao, "Encaminhado a conhecimento e providências")
+
+    def test_destinatario_unico_continua_sem_separador(self):
+        """Um só destinatário não ganha '; ' sobrando."""
+        r = self.ENGINE.classify(DESPACHO_003611)
+        self.assertEqual(r.destino, "CGATI")
+        self.assertNotIn(";", r.destino)
+
+    def test_cada_destinatario_reduz_a_sua_propria_sigla(self):
+        """Regressão 21260.001018/2026-85: o cabeçalho traz DOIS
+        destinatários, cada um com sua sigla ('... Gerais - CPSG' e
+        '... Logística - CCL'). Reduzir a célula inteira fazia o corte de
+        sufixo pegar o segundo e o primeiro sumir da linha.
+        """
+        r = self.ENGINE.classify(DESPACHO_64805953)
+        self.assertEqual(r.destino, "CPSG; CCL")
+
+
+# Cabeçalho com a unidade por extenso + código de memória do SEI (regressão
+# 21260.001552/2026-91): o travessão traz "CGTI/MMULHERES", o que impedia
+# tanto a redução por mapa quanto a extração da sigla após o travessão.
+DESPACHO_001552 = (
+    "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n"
+    "Coordenação-Geral de Gestão e Administração\n"
+    "Coordenação de Orçamento e Finanças\n\n"
+    "DESPACHO\n\n"
+    "Processo nº 21260.001552/2026-91\n\n"
+    "À Coordenação-Geral de Tecnologia da Informação - CGTI/MMULHERES\n"
+    "C/c: Subsecretaria de Gestão e Administração - SGA/SE\n\n"
+    "Em atenção ao Despacho Numerado 717 (59774593), que solicita a emissão "
+    "da Certificação de Disponibilidade Orçamentária (CDO) e descentralização "
+    "de crédito, encaminho para ciência e adoção das providências cabíveis."
+)
+
+# Despacho com três destinatários no cabeçalho (regressão
+# 12804.000730/2026-75): o motor colava as três linhas num destino só, com os
+# "À" e o "Assunto" do meio grudados.# Dois destinatários, cada um com a própria sigla (regressão
+# 21260.001018/2026-85): a redução de sigla precisa ser feita por destinatário,
+# senão o corte de sufixo da célula inteira faz o primeiro sumir.
+DESPACHO_64805953 = (
+    "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n"
+    "Subsecretaria de Gestão e Administração\n\n"
+    "DESPACHO Nº 526/2026/SGA/SE-MMULHERES\n\n"
+    "Processo nº 21260.001018/2026-85\n\n"
+    "À Coordenação de Patrimônio e Serviços Gerais - CPSG\n"
+    "À Coordenação de Contratação e Logística - CCL\n"
+    "C/c: À Coordenação-Geral de Administração e Orçamento\n\n"
+    "Em atenção ao Despacho (SEI-58653928), que versa a utilização dos "
+    "serviços de Telefonia Móvel disponibilizados no âmbito do ColaboraGov, "
+    "para conhecimento e providências."
+)
+
+DESPACHO_71163039 = (
+    "MINISTÉRIO DAS MULHERES\n"
+    "Secretaria Nacional de Enfrentamento à Violência contra Mulheres\n\n"
+    "DESPACHO\n\n"
+    "À Diretoria de Proteção de Direitos \n"
+    "À Coordenação-Geral de Prevenção à Violência contra Mulheres\n"
+    "À Unidade de Convênios\n"
+    "Assunto: \n"
+    "Realização de espelho de progresso\n\n"
+    "Cumprimentando-as cordialmente, encaminho, para conhecimento e "
+    "providências, o Despacho (64753990), proveniente da Coordenação de "
+    "Assessoramento e Registros."
+)
+
 DESPACHO_001630 = (
     "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\nSubsecretaria de Gestão e "
     "Administração\nCoordenação-Geral de Administração e Tecnologia da Informação\n\n"
