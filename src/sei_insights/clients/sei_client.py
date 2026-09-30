@@ -1061,28 +1061,38 @@ class SeiClient:
         page = page_size
         pages = 1
 
-        # O tamanho da página do SEI conta LINHAS, não processos: a pesquisa
-        # marca P+G+R, e documentos do mesmo processo repetem o número na
-        # página. Encerrar pelo total de processos únicos (22 vindos de uma
-        # página de 50 linhas) truncava a busca na primeira página sem aviso.
+        # `data.itens` é o TOTAL de linhas que o SEI encontrou, e é o campo
+        # que o próprio JS da página usa para paginar:
+        #     var qtdeItens = 0; ... qtdeItens = data.itens;
+        #     function verificarRegistros(){ ... if(totalTela < 10 && buscaInicio < qtdeItens){...} }
+        # Ele manda na paginação: o tamanho da página conta LINHAS, não
+        # processos (a pesquisa marca P+G+R e documentos do mesmo processo
+        # repetem o número), então uma página pode vir curta e ainda assim
+        # haver muito mais resultado. Encerrar em "página cheia" truncava a
+        # busca na primeira página sem aviso.
+        # Quando `itens` não vem (resposta de CAPTCHA rejeitado, que não tem o
+        # campo), cai no critério antigo de página cheia.
+        total = expected_total(data)
         rows = count_rows(data)
-        while rows >= page_size:
+        logger.info(
+            "SEI informou %d resultado(s) no total; a primeira página trouxe %d linha(s).",
+            total, rows,
+        )
+        while rows and (page < total if total > 0 else rows >= page_size):
             page_data = self._fetch_page_with_captcha_retry(page, page_size)
             rows = count_rows(page_data)
             page_numbers = parse_response(page_data)
             if not page_numbers:
                 logger.warning(
-                    "A página %d voltou sem processos e a busca parou aqui. "
-                    "Se o SEI tem mais resultados, a coleta ficou truncada.",
-                    pages + 1,
+                    "A página %d voltou sem processos e a busca parou aqui "
+                    "(offset %d de %d). Se o SEI tem mais resultados, a coleta "
+                    "ficou truncada.",
+                    pages + 1, page, total or -1,
                 )
                 break
             pages += 1
             for number in page_numbers:
                 self._add_result(results, number, page_data)
-            total_known = expected_total(page_data)
-            if total_known and len(results) >= total_known:
-                break
             page += page_size
             if page > page_size * 50:  # safety valve
                 break
@@ -1091,6 +1101,11 @@ class SeiClient:
             "Busca concluída: %d página(s) lida(s), %d processo(s) único(s).",
             pages, len(results),
         )
+        if total > 0 and page < total:
+            logger.warning(
+                "A busca terminou no offset %d, mas o SEI informou %d resultado(s): "
+                "a coleta pode estar incompleta.", page, total,
+            )
         return list(results.values())
 
     def _fetch_page_with_captcha_retry(self, inicio: int, page_size: int) -> dict:

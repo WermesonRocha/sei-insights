@@ -34,12 +34,19 @@ def count_rows(data: dict) -> int:
     recebidos (R), e cada linha traz `data-prot` com o processo-pai: várias
     linhas do mesmo processo repetem o mesmo número. `parse_response` remove
     essa repetição, então a contagem de processos únicos NÃO serve para saber
-    se a página veio cheia — é isto que define se há próxima página.
+    se a página veio cheia.
+
+    A classe `pesquisaTituloRegistro` é a que o próprio JS do SEI conta em
+    `verificarRegistros()` ($('table tbody tr.pesquisaTituloRegistro').length),
+    então é a contagem mais fiel; `data-prot` cobre as linhas que vierem sem
+    essa classe.
     """
     html = (data or {}).get("html", "") or ""
     if not html:
         return 0
-    return len(BeautifulSoup(html, "html.parser").select("[data-prot]"))
+    soup = BeautifulSoup(html, "html.parser")
+    return max(len(soup.select("tr.pesquisaTituloRegistro")),
+               len(soup.select("[data-prot]")))
 
 
 def expected_total(data: dict) -> int:

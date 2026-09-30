@@ -51,6 +51,30 @@ class IsSearchResponseTest(unittest.TestCase):
         self.assertFalse(SeiClient.is_search_response(r))
 
 
+class CountRowsTest(unittest.TestCase):
+    """`count_rows` conta linhas, e a classe do SEI é `pesquisaTituloRegistro`.
+
+    É a mesma classe que o JS da página conta em `verificarRegistros()`
+    ($('table tbody tr.pesquisaTituloRegistro').length).
+    """
+
+    def test_conta_linhas_pela_classe_do_sei(self):
+        html = "".join(
+            f"<tr class='pesquisaTituloRegistro' data-prot='21260.{i:07d}/2026-15'></tr>"
+            for i in range(3)
+        )
+        self.assertEqual(count_rows({"html": html}), 3)
+
+    def test_conta_linhas_repetidas_do_mesmo_processo(self):
+        """50 linhas podem ser de poucos processos: contam-se as linhas."""
+        html = _result_rows([f"21260.000000/2026-{i:02d}" for i in range(50)])
+        self.assertEqual(count_rows({"html": html}), 50)
+
+    def test_html_vazio(self):
+        self.assertEqual(count_rows({"html": ""}), 0)
+        self.assertEqual(count_rows({}), 0)
+
+
 class ExtractProcessTest(unittest.TestCase):
     def test_acha_por_data_prot(self):
         html = ("<div><tr data-prot='21260.003436/2026-15'>"
@@ -333,9 +357,12 @@ class _OrderPaginationClient(_PaginationClient):
 class PaginationLoopTest(unittest.TestCase):
     """Pina a semântica do loop de paginação sem navegador/rede.
 
-    Contrato real do SEI (spike:100,126): resposta AJAX é {"html": ...}
-    sem itens; a paginação termina quando uma página vem curta/vazia e
-    expected_total é apenas limite adicional quando itens existe.
+    Contrato real do SEI (JS de md_pesq_pesquisa.php, função
+    verificarRegistros): a resposta AJAX traz `itens` com o total de
+    resultados (`qtdeItens = data.itens`) e o navegador carrega mais
+    páginas enquanto `buscaInicio < qtdeItens`, com `rowsSolr = 50`.
+    Sem `itens` no JSON (formato de CAPTCHA rejeitado), vale o critério
+    antigo de página cheia.
     """
 
     def test_pagina_final_curta_para_loop(self):
@@ -394,6 +421,41 @@ class PaginationLoopTest(unittest.TestCase):
         self.assertEqual(client.fetch_calls, [(50, 50)],
                          "a página 1 veio cheia (50 linhas): deveria paginar")
         self.assertEqual(len(results), 30, "22 da pág. 1 + 8 da pág. 2")
+
+    def test_pagina_ate_o_total_informado_pelo_sei(self):
+        """`data.itens` é o total do servidor e manda na paginação.
+
+        O JS do próprio SEI (verificarRegistros) carrega mais páginas
+        enquanto `buscaInicio < qtdeItens`, com `qtdeItens = data.itens`.
+        Uma página pode ter menos de 50 linhas e mesmo assim haver muito
+        mais resultado: encerrar em "página curta" truncava a busca.
+        """
+        primeira = {"html": _result_rows(_numbers(0, 20)), "itens": 120}
+        segunda = {"html": _result_rows(_numbers(50, 50)), "itens": 120}
+        terceira = {"html": _result_rows(_numbers(100, 20)), "itens": 120}
+        client = _PaginationClient(primeira, [segunda, terceira])
+
+        results = client.search_processes(
+            "MMULHERES", "U", "01/01/2026", "31/03/2026")
+
+        self.assertEqual(client.fetch_calls, [(50, 50), (100, 50)])
+        self.assertEqual(len(results), 90)  # 20 + 50 + 20
+
+    def test_total_zerado_cai_no_comportamento_antigo(self):
+        """Sem `itens` (formato de CAPTCHA rejeitado) mantém o critério antigo."""
+        primeira = {"html": _result_rows(_numbers(0, 50))}
+        curta = {"html": _result_rows(_numbers(50, 12))}
+        client = _PaginationClient(primeira, [curta])
+        results = client.search_processes("MMULHERES", "U", "01/09/2026", "22/09/2026")
+        self.assertEqual(client.fetch_calls, [(50, 50)])
+        self.assertEqual(len(results), 62)
+
+    def test_pagina_vazia_no_meio_avisa_em_vez_de_truncar(self):
+        """Página vazia com total pendente é o outro modo de trunção calada."""
+        primeira = {"html": _result_rows(_numbers(0, 10)), "itens": 300}
+        client = _PaginationClient(primeira, [{"html": ""}])
+        with self.assertLogs("sei-insights", level="WARNING"):
+            client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
 
     def test_captcha_resolvido_antes_de_preencher_criterios(self):
         client = _OrderPaginationClient(
