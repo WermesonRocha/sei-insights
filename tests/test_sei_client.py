@@ -443,6 +443,32 @@ class PaginationLoopTest(unittest.TestCase):
             "o offset deve avançar pelas linhas realmente lidas, não por page_size",
         )
 
+    def test_log_conta_linhas_lidas_e_o_offset_de_cada_pagina(self):
+        """O log por página é o que fecha a auditoria da cobertura.
+
+        Uma execução real leu 5 páginas e informou 183 linhas. Registrar o
+        offset pedido e as linhas recebidas deixa visível qual página veio
+        curta; sem isso só se vê o total de processos, que não distingue
+        cobertura completa de buraco silencioso.
+        """
+        primeira = {"html": _result_rows(_numbers(0, 47)), "itens": 183}
+        segunda = {"html": _result_rows(_numbers(47, 50)), "itens": 183}
+        terceira = {"html": _result_rows(_numbers(97, 50)), "itens": 183}
+        quarta = {"html": _result_rows(_numbers(147, 33)), "itens": 183}
+        quinta = {"html": _result_rows(_numbers(180, 3)), "itens": 183}
+        client = _PaginationClient(
+            primeira, [segunda, terceira, quarta, quinta])
+
+        with self.assertLogs("sei-insights", level="INFO") as cap:
+            client.search_processes(
+                "MMULHERES", "U", "01/01/2026", "31/03/2026")
+
+        texto = "\n".join(cap.output)
+        for offset in ("offset 0", "offset 47", "offset 97", "offset 147",
+                       "offset 180"):
+            self.assertIn(offset, texto)
+        self.assertIn("183 linha(s) lida(s) de 183 informada(s)", texto)
+
     def test_pagina_ate_o_total_informado_pelo_sei(self):
         """`data.itens` é o total do servidor e manda na paginação.
 

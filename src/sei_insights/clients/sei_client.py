@@ -1073,10 +1073,16 @@ class SeiClient:
         # campo), cai no critério antigo de página cheia.
         total = expected_total(data)
         rows = count_rows(data)
+        read_rows = rows
         logger.info(
             "SEI informou %d resultado(s) no total; a primeira página trouxe %d linha(s).",
             total, rows,
         )
+        if page_numbers:
+            logger.info(
+                "  página 1: offset 0, %d linha(s), processo(s) %s .. %s",
+                rows, page_numbers[0], page_numbers[-1],
+            )
         # O próximo offset avança pelas LINHAS realmente lidas, nunca por
         # `page_size`. Uma página pode vir curta (47 linhas de 50) e um salto
         # fixo de 50 pularia as linhas de offset 47..49 para sempre — no caso
@@ -1099,13 +1105,21 @@ class SeiClient:
             pages += 1
             for number in page_numbers:
                 self._add_result(results, number, page_data)
+            read_rows += rows
+            logger.info(
+                "  página %d: offset %d, %d linha(s), processo(s) %s .. %s "
+                "(acumulado %d/%s linha(s))",
+                pages, page, rows, page_numbers[0], page_numbers[-1],
+                read_rows, total or "?",
+            )
             page += rows
             if page > page_size * 50:  # safety valve
                 break
 
         logger.info(
-            "Busca concluída: %d página(s) lida(s), %d processo(s) único(s).",
-            pages, len(results),
+            "Busca concluída: %d página(s) lida(s), %d processo(s) único(s), "
+            "%d linha(s) lida(s) de %s informada(s).",
+            pages, len(results), read_rows, total or "?",
         )
         if total > 0 and page < total:
             logger.warning(

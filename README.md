@@ -144,8 +144,16 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    >
    > ```
    > SEI informou 183 resultado(s) no total; a primeira página trouxe 47 linha(s).
-   > Busca concluída: 4 página(s) lida(s), 67 processo(s) único(s).
+   >   página 1: offset 0, 47 linha(s), processo(s) ... .. ...
+   >   página 2: offset 47, 50 linha(s), processo(s) ... .. ... (acumulado 97/183 linha(s))
+   >   ...
+   > Busca concluída: 5 página(s) lida(s), 67 processo(s) único(s), 183 linha(s) lida(s) de 183 informada(s).
    > ```
+   >
+   > A contagem de páginas **não é um número fixo**: depende de quantas
+   > linhas o SEI devolve em cada requisição. O que precisa fechar é a soma
+   > das linhas — por isso o log mostra `offset`, `linha(s)` e `acumulado`
+   > em cada página. Se a soma final não bater com `itens`, sobrou buraco.
    >
    > Um processo **nunca** some por isso: ele pode ter sido descoberto por
    > qualquer uma das suas linhas (o próprio processo, um documento gerado
@@ -188,14 +196,23 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    — e somar `50` ao offset pularia para sempre as linhas de posição 47,
    48 e 49. Isso dava 180 linhas lidas contra 183 informadas (bug real,
    mesma execução). Somando o **tamanho real da página anterior**, nenhum
-   offset é pulado: as 4 páginas passaram a ser `47 + 50 + 50 + 36 = 183`,
-   com sobreposição zero. Uma página cheia continua avançando 50, então o
-   caso comum não muda.
+   offset é pulado: somando o **tamanho real da página anterior**, a soma das
+   linhas passa a fechar com o total informado. Uma página cheia continua
+   avançando 50, então o caso comum não muda.
 
-   Cada execução registra `Busca concluída: N página(s) lida(s), M
-   processo(s) único(s)`, e uma página que volta vazia no meio — ou a
-   busca terminando com `inicio < itens` — gera aviso em vez de truncar
-   calado.
+   Cada execução registra uma linha por página com o `offset` pedido, as
+   `linha(s)` recebidas e o `acumulado`, e fecha com
+   `Busca concluída: N página(s) lida(s), M processo(s) único(s),
+   L linha(s) lida(s) de T informada(s)`. Uma página que volta vazia no
+   meio — ou a busca terminando com `inicio < itens` — gera aviso em vez de
+   truncar calado.
+
+   **O log é a auditoria, não a decoração.** Como a dedupe apaga a
+   distinção entre "processo visto por 3 linhas" e "processo nunca
+   visto", o total de processos é cego a linhas faltantes: duas execuções
+   com buracos diferentes podem reportar o mesmo número de processos. Por
+   isso a conferência de cobertura é a **soma das linhas lidas contra
+   `data.itens`**, e é ela que precisa fechar em 183 — não o 67.
 
    **CAPTCHA rejeitado não é "sem resultados".** Quando o OCR erra o código,
    o SEI **não** responde 4xx: responde **HTTP 200** com o HTML de erro
@@ -569,7 +586,7 @@ Cada linha da aba principal corresponde a **um processo**:
 > preenchidas?** Elas são **inferidas do texto do último Despacho** — não são
 > cadastradas à mão nem geradas por adivinhação. A seção
 > [De onde vem cada campo (nada é inventado)](#de-onde-vem-cada-campo-nada-e-inventado)
-> mostra, campo a campo, a fonte literal de cada valor, quatro exemplos
+> mostra, campo a campo, a fonte literal de cada valor, exemplos
 > reais rastreados e o que acontece quando a coluna fica vazia.
 
 > **Todos os valores das abas são gravados como Texto** (formato `@`).
@@ -637,7 +654,7 @@ Para cada despacho:
       unidades, `CPSG` e `CCL`, e as duas aparecem;
    3. sem os dois, não há destinatário no cabeçalho (o timbrado é
       descartado). Cada nome é mantido **por extenso e exato** (sem o
-      `Aos/Ao/Às/À`); vira **sigla** quando o **nome inteiro** equalingue
+      `Aos/Ao/Às/À`); vira **sigla** quando o **nome inteiro** for igual
       a uma chave do mapa `siglas` do `regras.json` (comparação normalizada,
       ignorando acentos e hífens), quando a sigla aparece entre parênteses
       (`(CGATI)`) ou após travessão (`– COSIS`), ou quando o nome por
