@@ -1414,6 +1414,10 @@ class SeiClient:
         restrito ou a tabela não expôs o Despacho): quem chamou deve tratá-lo
         como "Sem despacho público". Erros reais de download levantam
         RuntimeError.
+
+        Consequência esperada na planilha: estes processos são gravados sem
+        PDF, então a quantidade de arquivos em downloads/ é menor que a de
+        registros. Ver a nota completa em cli.py (analyze_one).
         """
         logger.info(
             "Baixando despacho %s (último Despacho em #tblDocumentos)...",

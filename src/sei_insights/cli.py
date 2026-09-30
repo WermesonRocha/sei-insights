@@ -229,6 +229,22 @@ def analyze_process(
 
     if despacho is None:
         # Sem despacho na árvore: não há o que baixar.
+        #
+        # O processo continua sendo gravado na planilha, com a situação
+        # "Sem despacho público" preenchida. A contagem de PDFs em downloads/
+        # é MENOR que a de registros por exatamente estes processos — e isso
+        # é o comportamento correto, não perda de coleta.
+        #
+        # Exemplo medido (01/01/2026 a 31/03/2026, CGATI/MMULheres):
+        # 67 processos gravados, 16 sem despacho público, 51 PDFs em
+        # downloads/ — 67 - 16 = 51, fecha dos dois lados.
+        #
+        # Os dois motivos possíveis de cair aqui ainda não são distinguíveis
+        # pelo log: o processo realmente não tem despacho público, ou tem e
+        # não está em #tblDocumentos (nomenclatura diferente, outra seção da
+        # árvore, ou documento restrito que o SEI oculta). Diagnóstico
+        # futuro: registrar o que a página do processo tem (tipo e quantidade
+        # de documentos na árvore) para separar os dois casos.
         return ProcessRow(
             numero=p.number, data_execucao=now, data_ultimo_despacho="",
             situacao="Sem despacho público", destino="", acao_esperada="",
@@ -258,6 +274,8 @@ def analyze_process(
     )
 
     if result is None:
+        # Mesmo tratamento do caso acima: o despacho existe na árvore, mas o
+        # SEI não oferece download público dele. Também gera registro sem PDF.
         return ProcessRow(
             numero=p.number, data_execucao=now, data_ultimo_despacho="",
             situacao="Sem despacho público", destino="", acao_esperada="",
