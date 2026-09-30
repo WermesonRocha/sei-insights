@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 
@@ -183,6 +184,228 @@ class RulesTest(unittest.TestCase):
         self.assertNotIn("Secretaria", r.situacao)
         self.assertNotIn("Em Coordenação", r.situacao)
 
+    def test_timbrado_longo_nao_vira_destino(self):
+        """Regressão real (14021.109425/2025-14): timbrado de 6 linhas.
+
+        `_is_letterhead` só aceitava até 3 linhas, então o timbrado do MGI
+        foi lido como corpo e a regra de unidade interna capturou
+        'SECRETARIA' -> destino 'Secretaria' / situação 'Em Secretaria'.
+        """
+        engine = RulesEngine.from_file(Path("regras.json"))
+        r = engine.classify(
+            "MINISTÉRIO DA GESTÃO E DA INOVAÇÃO EM SERVIÇOS PÚBLICOS\n"
+            "Secretaria de Serviços Compartilhados\n"
+            "Diretoria de Administração e Logística\n"
+            "Coordenação-Geral de Projetos e Contratos Transversais\n"
+            "Coordenação de Contratos Transversais\n"
+            "Divisão de Contratos Transversais\n"
+            "DESPACHO\n\n"
+            "Processo nº 14021.109425/2025-14\n\n"
+            "INFORMAÇÕES PARA PAGAMENTO DE DESPESA CONTRATUAL\n"
+        )
+        self.assertNotEqual(r.destino, "Secretaria")
+        self.assertNotIn("Em Secretaria", r.situacao)
+
+
+class DestinoPlaceholderTest(unittest.TestCase):
+    """Pina o placeholder `{destino}`: a situação passa a dizer DE QUEM.
+
+    Bug real: 23 de 37 despachos saíam genéricos ("Em Coordenação",
+    "Em Secretaria", "Encaminhado a ciência") porque a situação media a
+    ação e descartava o destinatário, que já estava disponível na coluna
+    ao lado. `{destino}` expande com o valor LITERAL do cabeçalho — a
+    situação continua autossuficiente sem inventar nada.
+    """
+
+    ENGINE = RulesEngine({
+        "regras": [
+            {
+                # casa o CORPO (o cabeçalho é lido à parte). O grupo 1 captura
+                # a unidade interna citada no corpo; a situação usa o
+                # placeholder para dizer DE QUEM é o trabalho.
+                "pattern": r"(?:Retorno a esta (COORDENA[ÇC][ÃA]O)[^.]*)?an[áa]lise",
+                "situacao": "Em {destino}",
+                "destino": "\\1",
+                "acao_esperada": "análise",
+                "pendencia_curta": "",
+            },
+        ],
+        # usa o mapa real de siglas para exercitar a redução por equivalência
+        "siglas": json.loads(Path("regras.json").read_text(encoding="utf-8"))["siglas"],
+    })
+
+    def test_expande_com_destino_do_cabecalho(self):
+        r = self.ENGINE.classify(
+            "À Coordenação-Geral de Administração e Tecnologia da Informação\n\n"
+            "Trata-se de análise da solicitação."
+        )
+        self.assertEqual(r.destino, "CGATI")
+        self.assertEqual(r.situacao, "Em CGATI")
+
+    def test_expande_com_nome_por_extenso_quando_nao_ha_sigla(self):
+        r = self.ENGINE.classify(
+            "À Gabinete da Ministra\n\nTrata-se de análise da solicitação."
+        )
+        self.assertEqual(r.destino, "Gabinete da Ministra")
+        self.assertEqual(r.situacao, "Em Gabinete da Ministra")
+
+    def test_sem_destino_nao_deixa_placeholder_quebrado(self):
+        """Sem destino, expande para rótulo explícito — nunca string vazia
+        ('Em ') nem o placeholder literal."""
+        r = self.ENGINE.classify("Solicita-se análise da coordenação.")
+        self.assertNotIn("{destino}", r.situacao)
+        self.assertEqual(r.situacao, "Em (destino não identificado)")
+
+    def test_destino_tem_precedencia_sobre_o_capturado_no_corpo(self):
+        """O cabeçalho manda: o corpo diz 'Retorno a esta Coordenação', mas
+        quem recebeu o processo foi a CGATI — vale o endereçado, igual à
+        precedência já aplicada à coluna `destino`."""
+        r = self.ENGINE.classify(
+            "À Coordenação-Geral de Administração e Tecnologia da Informação\n\n"
+            "Retorno a esta Coordenação para análise e continuidade."
+        )
+        self.assertEqual(r.destino, "CGATI")
+        self.assertEqual(r.situacao, "Em CGATI")
+
+    def test_destino_com_caractere_de_regex_nao_quebra_a_expansao(self):
+        """O texto do despacho é literal: um `\\1` escrito no nome do
+        destinatário é copiado, não consumido como backreference."""
+        r = self.ENGINE.classify(
+            "À \\1 Charlatan\n\nTrata-se de análise."
+        )
+        self.assertEqual(r.destino, "\\1 Charlatan")
+        self.assertEqual(r.situacao, "Em \\1 Charlatan")
+
+
+class RegraGenericaInternaTest(unittest.TestCase):
+    """Regras específicas da unidade e genérica interna (regras.json real)."""
+
+    def setUp(self):
+        self.engine = RulesEngine.from_file(Path("regras.json"))
+
+    def test_regra_interna_diz_a_unidade_nao_o_substantivo(self):
+        """Regressão 21260.001144/2026-30 e afins: 'Em Coordenação' -> 'Em CGATI'.
+
+        A regra interna capturava só o substantivo ('COORDENAÇÃO'); agora a
+        situação usa o destino efetivo, que vem do cabeçalho. Isola a regra
+        para não depender de outras que casem o mesmo texto.
+        """
+        cfg = json.loads(Path("regras.json").read_text(encoding="utf-8"))
+        internas = [r for r in cfg["regras"] if r["situacao"] == "Em {destino}"]
+        self.assertEqual(len(internas), 1, "espera 1 única regra com {destino}")
+        engine = RulesEngine({"regras": internas, "siglas": cfg["siglas"]})
+        r = engine.classify(
+            "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n\n"
+            "DESPACHO\n\nProcesso nº 21260.001144/2026-30\n\n"
+            "À Coordenação-Geral de Administração e Tecnologia da Informação\n\n"
+            "Retorno a esta Coordenação para análise e continuidade do processo."
+        )
+        self.assertEqual(r.destino, "CGATI")
+        self.assertEqual(r.situacao, "Em CGATI")
+        self.assertEqual(
+            r.pendencia_curta, "Processo com CGATI para análise/próximo passo"
+        )
+
+    def test_regra_interna_sem_cabecalho_mantem_o_substantivo(self):
+        """Sem cabeçalho não há destino para citar: a situação repete o
+        substantivo encontrado (honesto) em vez de prometer um identificador."""
+        cfg = json.loads(Path("regras.json").read_text(encoding="utf-8"))
+        internas = [r for r in cfg["regras"] if r["situacao"] == "Em {destino}"]
+        engine = RulesEngine({"regras": internas, "siglas": cfg["siglas"]})
+        r = engine.classify("Retorno a esta Coordenação para análise.")
+        self.assertEqual(r.destino, "Coordenação")
+        self.assertEqual(r.situacao, "Em Coordenação")
+
+    def test_apreciacao_e_acao_reconhecida(self):
+        """Regressão 21260.001144/2026-30 e 21260.003895/2026-91.
+
+        'apreciação' e 'publicação' não estavam no vocabulário de ações, então
+        o texto caía no fallback 'Em análise'.
+        """
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\n\nDESPACHO\n\n"
+            "À Gabinete da Ministra\n\n"
+            "Encaminho, para apreciação e providências, a solicitação."
+        )
+        self.assertEqual(r.situacao, "Encaminhado a apreciação e providências")
+
+    def test_publicacao_e_acao_reconhecida(self):
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\n\nDESPACHO\n\n"
+            "À Gabinete da Ministra\n\n"
+            "Em atenção ao Despacho SEI nº 64734700, encaminha-se a Portaria "
+            "de Pessoal nº 233, para publicação no Diário Oficial da União."
+        )
+        self.assertTrue(r.situacao.startswith("Encaminhado a"))
+        self.assertIn("publicação", r.situacao)
+        self.assertNotEqual(r.situacao, "Em análise")
+
+    def test_encaminho_para_acao_sem_autos_a_unidade(self):
+        """Regressão 21260.001480/2026-82 e 12804.000290/2026-62.
+
+        'Encaminho para conhecimento e providências o DFD' não tinha padrão
+        (as regras existentes exigiam 'os autos a <unidade>').
+        """
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\n\nDESPACHO\n\n"
+            "À Secretaria de Gestão e Administração\n\n"
+            "Encaminho para conhecimento e providências o Documento de "
+            "Formalização de Demanda, que trata de aquisição de equipamentos."
+        )
+        self.assertEqual(r.situacao, "Encaminhado a conhecimento e providências")
+        self.assertEqual(r.destino, "Secretaria de Gestão e Administração")
+
+    def test_termo_de_encerramento_nao_vira_em_assessoria(self):
+        """Regressão 21260.001106/2026-87.
+
+        'Termo de Encerramento ... procedo ao seu encerramento' caía na regra
+        de unidade interna e virava 'Em Assessoria' (cargo da signatária).
+        """
+        r = self.engine.classify(DESPACHO_001106)
+        self.assertEqual(r.situacao, "Encerrado")
+        self.assertNotIn("Assessoria", r.situacao)
+        self.assertNotIn("Assessoria", r.destino)
+
+    def test_bloco_de_assinatura_nao_vira_destino(self):
+        """O cargo da signatária ('Assessora Técnica', unidade) é bloco de
+        assinatura e não pode virar destinatário."""
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\n\nDESPACHO\n\n"
+            "À Gabinete da Ministra\n\n"
+            "Encaminho para conhecimento.\n\n"
+            "Brasília, na data da assinatura.\n\n"
+            "assinado digitalmente\nJOÃO DA SILVA\nAssessor Técnico\n"
+            "Assessoria Especial de Controle Interno - AECI\n\n"
+            "A autenticidade deste documento pode ser conferida no site."
+        )
+        self.assertEqual(r.destino, "Gabinete da Ministra")
+        self.assertNotIn("Assessoria", r.situacao)
+
+
+class CampoDestinoTest(unittest.TestCase):
+    """O campo `Destino:` que o SEI imprime em alguns despachos.
+
+    Regressão 21260.000680/2025-37: o documento traz
+    `Destino: Assessoria Especial de Comunicação Social - ASCOM`, o motor
+    só lia `À/Ao/Aos/Às`, e o timbrado vencia -> 'Em Secretaria'.
+    """
+
+    ENGINE = RulesEngine.from_file(Path("regras.json"))
+
+    def test_campo_destino_e_lido(self):
+        r = self.ENGINE.classify(DESPACHO_000680)
+        self.assertEqual(r.destino, "ASCOM")
+        self.assertNotIn("Em Secretaria", r.situacao)
+
+    def test_campo_destino_nao_vaza_para_o_corpo(self):
+        r = self.ENGINE.classify(DESPACHO_000680)
+        self.assertNotIn("ASCOM", r.situacao.split("Em ")[-1][-4:])
+
+    def test_assunto_nao_vira_destino_quando_ha_campo_destino(self):
+        r = self.ENGINE.classify(DESPACHO_000680)
+        self.assertNotIn("Assunto", r.destino)
+        self.assertNotIn("Quem é Quem", r.destino)
+
 
 DESPACHO_001630 = (
     "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\nSubsecretaria de Gestão e "
@@ -324,4 +547,53 @@ DESPACHO_14021 = (
     "Assunto: Regulamentação do Protocolo Não é Não por meio da Portaria "
     "Interministerial MMULHERES/MJSP nº 121.\n\n"
     "Encaminho o presente processo para análise e providências."
+)
+
+# Despacho com o campo `Destino:` que o SEI imprime (regressão real
+# 21260.000680/2025-37): sem `À/Ao`, o timbrado vencia e o destino saía
+# "Secretaria" em vez da unidade endereçada (ASCOM).
+DESPACHO_000680 = (
+    "MINISTÉRIO DAS MULHERES\n"
+    "Secretaria-Executiva\n"
+    "Subsecretaria de Gestão e Administração\n"
+    "Coordenação-Geral de Gestão Estratégica\n"
+    "Coordenação de Governança, Prestação de Contas e Planejamento Estratégico\n\n"
+    "DESPACHO Nº 16/2026/CGPCE/CGGE/SGA/SE-MMULHERES\n\n"
+    "Processo nº 21260.000680/2025-37\n\n"
+    "Destino: \n"
+    "Assessoria Especial de Comunicação Social - ASCOM\n\n"
+    "Assunto\n:\n"
+    " Publicação de currículos - Seção \"Quem é Quem\" no portal "
+    "institucional.\n\n"
+    "Em atenção às diretrizes de transparência ativa e ao prazo estabelecido "
+    "pelo Ministério da Gestão e da Inovação, informamos que já foram "
+    "recebidos e anexados a este processo parte dos currículos dos "
+    "ocupantes de cargos em comissão e funções de confiança deste Ministério."
+)
+
+# Termo de Encerramento (regressão real 21260.001106/2026-87): caía na regra
+# de unidade interna e virava "Em Assessoria", nome do cargo da signatária.
+DESPACHO_001106 = (
+    "MINISTÉRIO DAS MULHERES\n"
+    "Assessoria Especial de Controle Interno\n\n"
+    "DESPACHO\n\n"
+    "Termo de Encerramento de Processo\n\n"
+    "Considerando que este processo cumpriu seu objetivo, procedo ao seu "
+    "encerramento.\n\n"
+    "Brasília, na data da assinatura.\n\n"
+    "assinado digitalmente\n"
+    "ANA CAROLINA SANTANA MOREIRA\n"
+    "Assessora Técnica\n"
+    "Assessoria Especial de Controle Interno - AECI\n"
+    "Documento assinado eletronicamente por \n"
+    "Ana Carolina Santana Moreira\n"
+    ", \n"
+    "Assessor(a) Técnico(a)\n"
+    ", em\n"
+    "20/07/2026, às 12:49, conforme horário oficial de Brasília, com "
+    "fundamento no § 3º do art. 4º do Decreto nº 10.543, de 13 de "
+    "novembro de 2020\n"
+    ".\n"
+    "A autenticidade deste documento pode ser conferida no site\n"
+    "https://colaboragov.sei.gov.br/sei/controlador/"
 )

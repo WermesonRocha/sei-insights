@@ -67,7 +67,7 @@
       "pendencia_curta": "Aguardando retorno do destinatário"
     },
     {
-      "pattern": "(?:en[ -]*caminha[ -]*se|en[ -]*caminham[ -]*se|en[ -]*caminho|remete[ -]*se|remetem[ -]*se|remeto)[\\s\\S]{0,160}?(?:à|a|para)\\s+([A-Za-zÀ-ÿ][\\wÀ-ÿ\\s/()º°+\\-]{2,80}?)\\s*,\\s*para\\s+((?:ciência|conhecimento|análise|avaliação|deliberação|manifestação|validação|adoção|providências?|apreciação)\\b[^\\n]*?)(?:,|\\s+quanto a|\\s+quanto à|\\s+sobre|\\s+acerca|\\s+(?:da|do|de|das|dos)\\b|\\s*$)",
+      "pattern": "(?:en[ -]*caminha[ -]*se|en[ -]*caminham[ -]*se|en[ -]*caminho|remete[ -]*se|remetem[ -]*se|remeto)[\\s\\S]{0,160}?(?:à|a|para)\\s+([A-Za-zÀ-ÿ][\\wÀ-ÿ\\s/()º°+\\-]{2,80}?)\\s*,\\s*para\\s+((?:ciência|conhecimento|análise|avaliação|deliberação|manifestação|validação|adoção|providências?|apreciação|publicação|pronunciamento)\\b[^\\n]*?)(?:,|\\s+quanto a|\\s+quanto à|\\s+sobre|\\s+acerca|\\s+(?:da|do|de|das|dos)\\b|\\s*$)",
       "situacao": "Encaminhado a \\2",
       "destino": "\\1",
       "acao_esperada": "\\2",
@@ -75,6 +75,13 @@
     },
     {
       "pattern": "(?:en[ -]*caminho|en[ -]*caminha[ -]*se|en[ -]*caminham[ -]*se|remeto|remete[ -]*se)\\s+o presente processo\\s+para\\s+((?:análise e providências|providências|análise)[\\wÀ-ÿ\\s,()/\\-]{0,60}?)(?:,|\\s+quanto a|\\s+quanto à|\\s*$)",
+      "situacao": "Encaminhado a \\1",
+      "destino": "",
+      "acao_esperada": "\\1",
+      "pendencia_curta": "Aguardando \\1 do destinatário"
+    },
+    {
+      "pattern": "(?:en[ -]*encaminho|en[ -]*encaminham[ -]*se|en[ -]*caminho|remoto|remete[ -]*se)[\\s,]*para\\s+((?:ciência|conhecimento|análise|apreciação|avaliação|deliberação|validação|pronunciamento|parecer|manifestação|adoção|providências?|publicação)(?:\\s+e\\s+(?:providências|ciência|conhecimento|análise|apreciação|avaliação|deliberação|validação|adoção|publicação))?)",
       "situacao": "Encaminhado a \\1",
       "destino": "",
       "acao_esperada": "\\1",
@@ -165,11 +172,18 @@
       "pendencia_curta": "Despacho sugere retomada oportuna da demanda (avaliação futura)"
     },
     {
+      "pattern": "(?:termo de encerramento(?: de processo)?|processo (?:cumpr|cumpri)\\w* seu objetivo|procedo(?:| a) ao seu encerramento|procede-se ao encerramento(?: do processo)?)",
+      "situacao": "Encerrado",
+      "destino": "",
+      "acao_esperada": "nenhuma (processo encerrado)",
+      "pendencia_curta": "Processo encerrado, sem ação pendente"
+    },
+    {
       "pattern": "\\b(SGA|CCL|CTI|SCL|SG|COORDENA[ÇC][ÃA]O|DIRETORIA|SECRETARIA|SUPERINTEND[ÊE]NCIA|GER[ÊE]NCIA|ASSESSORIA|N[ÚU]CLEO|DIVIS[ÃA]O|DEPARTAMENTO)\\b",
-      "situacao": "Em \\1",
+      "situacao": "Em {destino}",
       "destino": "\\1",
       "acao_esperada": "análise",
-      "pendencia_curta": "Processo com \\1 para análise/próximo passo"
+      "pendencia_curta": "Processo com {destino} para análise/próximo passo"
     },
     {
       "pattern": "\\b((?:Minist[ée]rio P[úu]blico|Tribunal de Contas|Controladoria|Pol[íi]cia Federal|Receita Federal|INSS|AGU|PGFN|DPF|MPF|MPDFT|TCU|CGU|CGM))\\b",

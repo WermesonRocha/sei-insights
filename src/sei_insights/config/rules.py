@@ -34,6 +34,20 @@ _META_PARAGRAPH = re.compile(
 _RECIPIENT_LINE = re.compile(
     r"(?m)^[ \t]*(?:Aos|Ao|Às|À)\s+", re.IGNORECASE
 )
+_DESTINO_FIELD = re.compile(
+    r"^[ \t]*(?:Destino|Destinat[áa]rio)[ \t]*[:.]?[ \t]*(.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+# O bloco de assinatura vem sempre no fim: do primeiro marcador até o final não
+# há conteúdo do despacho (cargo/unidade da signatária não é destinatário).
+_SIGNATURE_START = re.compile(
+    r"^\s*(?:assinado digitalmente|"
+    r"documento assinado eletronicamente|documento assinado por|"
+    r"a autenticidade deste documento)",
+    re.IGNORECASE,
+)
+_DESTINO_PLACEHOLDER = "{destino}"
+DESTINO_DESCONHECIDO = "(destino não identificado)"
 _LETTERHEAD_LINE = re.compile(
     r"^(?:MINIST[ÉE]RIO|SECRETARIA|SUBSECRETARIA|DIRETORIA|COORDENA[ÇC][ÃA]O|"
     r"GABINETE|ASSESSORIA|DIVIS[ÃA]O|N[ÚU]CLEO|DEPARTAMENTO|"
@@ -49,15 +63,25 @@ def _paragraphs(text: str) -> list[str]:
 def _is_letterhead(para: str) -> bool:
     """Diz se o parágrafo é só o timbrado (linhas que começam com órgão/unidade).
 
-    Timbrados reais têm 1-3 linhas (ex.: "MINISTÉRIO DAS MULHERES" acima de
-    "Secretaria Nacional de ..."); parágrafos de corpo não são todos de
-    unidade/órgão. Isso evita que palavras do papel de fundo alimentem regras
-    (falso "Em Secretaria") quando o despacho não tem linha de destinatário.
+    Timbrados reais podem ser longos (o timbrado do MGI tem 6 linhas:
+    Ministério, Secretaria, Diretoria, Coordenação-Geral, Coordenação e
+    Divisão) e costumam vir colados no 'DESPACHO' sem linha em branco, por
+    isso as linhas de metadados são ignoradas no teste; parágrafos de corpo
+    não são TODOS de unidade/órgão. Sem isso, um timbrado de 6 linhas era
+    lido como corpo e alimentava a regra de unidade interna (falso
+    "Em Secretaria").
     """
-    lines = [ln for ln in para.splitlines() if ln.strip()]
-    if not lines or len(lines) > 3:
+    lines = [
+        ln for ln in para.splitlines()
+        if ln.strip() and not _META_PARAGRAPH.match(ln)
+    ]
+    if not lines:
         return False
     return all(_LETTERHEAD_LINE.match(ln) for ln in lines)
+
+
+def _trim_trailing_labels(resto: str) -> str:
+    return re.sub(r"\s+", " ", resto).strip(" \t.,;:")
 
 
 def _recipient_from_paragraph(para: str) -> str:
@@ -69,25 +93,54 @@ def _recipient_from_paragraph(para: str) -> str:
         r"\b(?:C/c|Cc|Assunto|Refer[êe]ncia)\s*[:.]", resto,
         maxsplit=1, flags=re.IGNORECASE,
     )[0]
-    resto = re.sub(r"\s+", " ", resto).strip(" \t.,;:")
-    return resto
+    return _trim_trailing_labels(resto)
 
 
 def _split_body(text: str) -> tuple[str, str]:
     paras = _paragraphs(text)
-    recip_idx = None
-    for i, para in enumerate(paras):
-        if _RECIPIENT_LINE.search(para):
-            recip_idx = i
-            break
-    recipient = _recipient_from_paragraph(paras[recip_idx]) if recip_idx is not None else ""
+    # Precedência: campo `Destino:` (rótulo explícito do SEI) > linha
+    # `À/Ao/Aos/Às`. Sem os dois, o corpo começa depois do timbrado.
+    field_idx = next((i for i, p in enumerate(paras) if _DESTINO_FIELD.match(p)), None)
+    line_idx = next((i for i, p in enumerate(paras) if _RECIPIENT_LINE.search(p)), None)
+    if field_idx is not None:
+        recip_idx = field_idx
+        resto = _DESTINO_FIELD.match(paras[field_idx]).group(1)
+        resto = re.split(
+            r"\b(?:C/c|Cc|Assunto|Processo\s*n)\s*[:.]", resto,
+            maxsplit=1, flags=re.IGNORECASE,
+        )[0]
+        recipient = _trim_trailing_labels(resto)
+    elif line_idx is not None:
+        recip_idx = line_idx
+        recipient = _recipient_from_paragraph(paras[line_idx])
+    else:
+        recip_idx = None
+        recipient = ""
     start = recip_idx + 1 if recip_idx is not None else 0
     if recip_idx is None:
-        # Sem linha de destinatário, descarta o timbrado que abre o documento.
         while start < len(paras) and _is_letterhead(paras[start]):
             start += 1
+    # Corta o bloco de assinatura: nunca é conteúdo do despacho.
+    for i in range(start, len(paras)):
+        if _SIGNATURE_START.match(paras[i]):
+            paras = paras[:i]
+            break
     body = [p for p in paras[start:] if not _META_PARAGRAPH.match(p)]
     return recipient, " ".join(re.sub(r"\s+", " ", p) for p in body)
+
+
+def _expand_destino(valor: str, destino: str) -> str:
+    """Substitui `{destino}` pelo destinatário LITERAL já resolvido.
+
+    A troca é literal (não regex): um `\\1` que faça parte do nome do
+    destinatário não pode virar backreference na situação. Sem destino
+    conhecido, usa rótulo explícito em vez de deixar a frase quebrada.
+    """
+    if _DESTINO_PLACEHOLDER not in valor:
+        return valor
+    return valor.replace(
+        _DESTINO_PLACEHOLDER, destino or DESTINO_DESCONHECIDO
+    )
 
 
 class RulesEngine:
@@ -149,4 +202,14 @@ class RulesEngine:
                 break
         if destino_cabecalho:
             result.destino = destino_cabecalho
+        # `{destino}` expande com o destinatário EFETIVO (cabeçalho tem
+        # precedência sobre o capturado pela regra) para a situação dizer DE
+        # QUEM é o trabalho.
+        effective = result.destino or DESTINO_DESCONHECIDO
+        result = RuleResult(
+            situacao=_expand_destino(result.situacao, effective),
+            destino=result.destino,
+            acao_esperada=_expand_destino(result.acao_esperada, effective),
+            pendencia_curta=_expand_destino(result.pendencia_curta, effective),
+        )
         return result
