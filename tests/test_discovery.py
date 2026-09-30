@@ -3,6 +3,7 @@ import unittest
 from sei_insights.clients.discovery import (
     expected_total,
     extract_process_number,
+    is_captcha_error,
     pagination_params,
     parse_response,
 )
@@ -11,6 +12,13 @@ ROW1 = ("<tr data-prot='21260.003436/2026-15'>"
         "<td><a href='md_pesq_processo_exibir.php?id=1'>Proc 1</a></td></tr>")
 ROW2 = ("<tr data-prot='21260.003437/2026-16'>"
         "<td><a href='md_pesq_processo_exibir.php?id=2'>Proc 2</a> 21260.003437/2026-16</td></tr>")
+
+# HTML real do SEI quando o OCR erra o CAPTCHA (diagnóstico ao vivo).
+CAPTCHA_ERROR_HTML = (
+    "<consultavazia><div class='sem-resultado'>"
+    "<p class='alert alert-danger'>Código de confirmação inválido 1.</p>"
+    "</div></consultavazia>"
+)
 
 
 class DiscoveryTest(unittest.TestCase):
@@ -55,3 +63,31 @@ class DiscoveryTest(unittest.TestCase):
 
     def test_extrai_vazio_sem_cabecalho(self):
         self.assertEqual(extract_process_number("<html><body>oi</body></html>"), "")
+
+
+class CaptchaErrorTest(unittest.TestCase):
+    """Pina a detecção de CAPTCHA rejeitado pelo SEI.
+
+    Bug real: quando o OCR erra, o SEI responde 200 OK com o HTML
+    "Código de confirmação inválido" dentro de `.sem-resultado` — o parser
+    via zero processos e a busca parecia "sem resultados" no período.
+    """
+
+    def test_detecta_captcha_invalido(self):
+        self.assertTrue(is_captcha_error({"html": CAPTCHA_ERROR_HTML}))
+
+    def test_detecta_captcha_invalido_sem_envelope_sem_resultado(self):
+        html = "<p class='alert alert-danger'>Código de confirmação inválido 7.</p>"
+        self.assertTrue(is_captcha_error({"html": html}))
+
+    def test_nao_detecta_em_html_vazio(self):
+        self.assertFalse(is_captcha_error({"html": ""}))
+        self.assertFalse(is_captcha_error({}))
+
+    def test_nao_detecta_em_pagina_com_resultados(self):
+        self.assertFalse(is_captcha_error({"html": ROW1 + ROW2}))
+
+    def test_nao_detecta_em_busca_legitima_sem_resultado(self):
+        html = ("<div class='sem-resultado'>"
+                "<p>Nenhum documento localizado.</p></div>")
+        self.assertFalse(is_captcha_error({"html": html}))

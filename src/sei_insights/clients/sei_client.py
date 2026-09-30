@@ -18,6 +18,7 @@ from sei_insights.clients.captcha_solver import CaptchaSolver
 from sei_insights.clients.discovery import (
     expected_total,
     extract_process_number,
+    is_captcha_error,
     pagination_params,
     parse_response,
 )
@@ -833,19 +834,8 @@ class SeiClient:
             "() => (document.getElementById('hdnIdUnidade') || {}).value || ''"
         )
 
-    def search_processes(self, orgao: str, unidade: str,
-                         inicio: str, fim: str, page_size: int = 50) -> list[ProcessResult]:
-        """Pesquisa processos por órgão/unidade/período e pagina os resultados."""
-        self.open_search_page()
-
-        # Segue o coletor (main.py:3590-3621): o CAPTCHA é resolvido antes
-        # de qualquer requisição de pesquisa ao SEI, inclusive o POST de
-        # autocomplete de unidade feito dentro de _set_search_criteria.
-        self.solve_search_captcha()
-
-        self._set_search_criteria(orgao, unidade, inicio, fim)
-        results: dict[str, ProcessResult] = {}
-
+    def _submit_and_read(self) -> dict:
+        """Clica em Pesquisar e devolve o JSON da resposta AJAX."""
         try:
             with self.page.expect_response(
                 SeiClient.is_search_response,
@@ -868,7 +858,7 @@ class SeiClient:
                     f"Resposta:\n{body[:3000]}"
                 )
 
-            data = response.json()
+            return response.json()
         except RuntimeError:
             raise
         except Exception as exc:
@@ -883,6 +873,48 @@ class SeiClient:
             except Exception:
                 pass
 
+    def search_processes(self, orgao: str, unidade: str,
+                         inicio: str, fim: str, page_size: int = 50) -> list[ProcessResult]:
+        """Pesquisa processos por órgão/unidade/período e pagina os resultados.
+
+        Um CAPTCHA rejeitado pelo SEI chega como HTTP 200 com HTML de erro
+        (`.sem-resultado` + "Código de confirmação inválido"), não como 4xx.
+        Sem retry, o parser lê zero processos e a execução reporta período
+        "sem resultados" — o bug real que esvaziou a planilha. Aqui cada
+        tentativa recarrega o CAPTCHA (`updateCaptcha()` no `.always()` do
+        SEI) e refaz os critérios; esgotadas as tentativas, falha explícito
+        em vez de devolver lista vazia.
+        """
+        self.open_search_page()
+
+        # Segue o coletor (main.py:3590-3621): o CAPTCHA é resolvido antes
+        # de qualquer requisição de pesquisa ao SEI, inclusive o POST de
+        # autocomplete de unidade feito dentro de _set_search_criteria.
+        self.solve_search_captcha()
+        self._set_search_criteria(orgao, unidade, inicio, fim)
+
+        data: dict = {}
+        for attempt in range(1, MAX_RETRIES + 1):
+            data = self._submit_and_read()
+            if not is_captcha_error(data):
+                break
+            logger.warning(
+                "CAPTCHA rejeitado pelo SEI (tentativa %d/%d). "
+                "Resolvendo um novo CAPTCHA e refazendo a busca.",
+                attempt, MAX_RETRIES,
+            )
+            self.save_debug(f"captcha_invalido_{attempt}")
+            if attempt >= MAX_RETRIES:
+                raise RuntimeError(
+                    f"O SEI rejeitou o CAPTCHA {MAX_RETRIES} vezes seguidas. "
+                    "A busca foi interrompida para não reportar "
+                    "'nenhum resultado' indevidamente — tente novamente "
+                    "(opção --manual-captcha resolve OCRs difíceis)."
+                )
+            self.solve_search_captcha()
+            self._set_search_criteria(orgao, unidade, inicio, fim)
+
+        results: dict[str, ProcessResult] = {}
         page_numbers = parse_response(data)
         for number in page_numbers:
             self._add_result(results, number, data)
@@ -896,8 +928,7 @@ class SeiClient:
         # só como limite adicional quando itens existe e o safety valve
         # evita paginação infinita.
         while len(page_numbers) == page_size:
-            self.solve_search_captcha()
-            page_data = self._fetch_page(page, page_size)
+            page_data = self._fetch_page_with_captcha_retry(page, page_size)
             page_numbers = parse_response(page_data)
             if not page_numbers:
                 break
@@ -911,6 +942,30 @@ class SeiClient:
                 break
 
         return list(results.values())
+
+    def _fetch_page_with_captcha_retry(self, inicio: int, page_size: int) -> dict:
+        """Busca uma página paginada, refazendo o CAPTCHA se for rejeitado.
+
+        A paginação do SEI também valida o CAPTCHA; um erro aqui não pode
+        virar "página vazia" silencioso (aí o loop pararia com metades dos
+        processos). Após MAX_RETRIES, falha explícito.
+        """
+        for attempt in range(1, MAX_RETRIES + 1):
+            self.solve_search_captcha()
+            data = self._fetch_page(inicio, page_size)
+            if not is_captcha_error(data):
+                return data
+            logger.warning(
+                "CAPTCHA rejeitado pelo SEI na paginação (tentativa %d/%d).",
+                attempt, MAX_RETRIES,
+            )
+            if attempt >= MAX_RETRIES:
+                raise RuntimeError(
+                    f"O SEI rejeitou o CAPTCHA {MAX_RETRIES} vezes seguidas "
+                    f"ao paginar (inicio={inicio}). A busca foi interrompida "
+                    "para não truncar silenciosamente os resultados."
+                )
+        raise RuntimeError("Paginação sem resposta válida do SEI.")
 
     def open_process(self, process: ProcessResult) -> str:
         """Abre página do processo e retorna o HTML."""

@@ -103,6 +103,26 @@ class _FakePage:
         pass
 
 
+class _SequencePage(_FakePage):
+    """Page fake que devolve uma resposta diferente por submit.
+
+    Cada `expect_response` consome o próximo item da fila (reabastecida com
+    o último quando acaba) — reproduz o SEI recarregando o CAPTCHA a cada
+    busca (`updateCaptcha()` no `.always()`), então cada tentativa tem uma
+    resposta diferente.
+    """
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self._last = self._responses[-1]
+        self.submits = 0
+
+    def expect_response(self, predicate, timeout=None):
+        index = min(self.submits, len(self._responses) - 1)
+        self.submits += 1
+        return _ExpectResponse(_FakeResponse(self._responses[index]))
+
+
 class _FakeResponse:
     def __init__(self, data: dict):
         self.data = data
@@ -254,6 +274,117 @@ class PaginationLoopTest(unittest.TestCase):
             client.events.index("solve_captcha"),
             client.events.index("set_criteria"),
         )
+
+
+CAPTCHA_ERROR_HTML = (
+    "<consultavazia><div class='sem-resultado'>"
+    "<p class='alert alert-danger'>Código de confirmação inválido 1.</p>"
+    "</div></consultavazia>"
+)
+
+
+class _CaptchaRetryClient(SeiClient):
+    """SeiClient drive com respostas de submit roteirizadas por tentativa.
+
+    Reproduz o bug real: o 1º submit volta com CAPTCHA rejeitado (HTTP 200 +
+    HTML de erro) e o SEI recarrega a imagem via `updateCaptcha()`, então
+    cada novo submit precisa de um CAPTCHA novo.
+    """
+
+    def __init__(self, submit_responses, scripted_pages=None):
+        self.page = _SequencePage(submit_responses)
+        self.context = _FakeContext()
+        self.rate_limiter = _DummyRateLimiter()
+        self.use_manual_captcha = False
+        self.captcha_calls = 0
+        self.criteria_calls = 0
+        self._scripted = list(scripted_pages or [])
+
+    def open_search_page(self):
+        return None
+
+    def _set_search_criteria(self, orgao, unidade, inicio, fim):
+        self.criteria_calls += 1
+        return None
+
+    def solve_search_captcha(self):
+        self.captcha_calls += 1
+
+    def submit_search(self):
+        return None
+
+    def _fetch_page(self, inicio, page_size):
+        # Repete a última resposta roteirizada: em retry de CAPTCHA a mesma
+        # página é requisitada de novo e volta igual.
+        index = min(
+            MAX_RETRIES - len(self._scripted),
+            len(self._scripted) - 1,
+        )
+        return self._scripted[max(index, 0)] if self._scripted else {"html": ""}
+
+
+class SearchCaptchaRetryTest(unittest.TestCase):
+    """Pina o retry de CAPTCHA inválido na busca (bug de '0 resultados').
+
+    Log real: a pesquisa de 01/01/2026 a 31/03/2026 retornou 0 processos
+    porque o OCR errou o CAPTCHA; o SEI respondeu 200 OK com
+    "Código de confirmação inválido 1." dentro de `.sem-resultado`.
+    """
+
+    def test_captcha_invalido_repete_busca_e_encontra_resultados(self):
+        client = _CaptchaRetryClient([
+            {"html": CAPTCHA_ERROR_HTML},
+            {"html": _result_rows(_numbers(0, 3))},
+        ])
+        results = client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
+        self.assertEqual(len(results), 3)
+        self.assertEqual(client.page.submits, 2)
+        # 1 captcha antes do 1º submit + 1 novo antes do retry.
+        self.assertEqual(client.captcha_calls, 2)
+
+    def test_captcha_invalido_repreenche_criterios_no_retry(self):
+        """A unidade/órgão podem se perder no reload do SEI: repreencher."""
+        client = _CaptchaRetryClient([
+            {"html": CAPTCHA_ERROR_HTML},
+            {"html": _result_rows(_numbers(0, 3))},
+        ])
+        client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
+        self.assertEqual(client.criteria_calls, 2)
+
+    def test_captcha_invalido_persistente_falha_com_erro_explicito(self):
+        """Nunca devolver 0 silencioso: esgotar tentativas e avisar."""
+        client = _CaptchaRetryClient([{"html": CAPTCHA_ERROR_HTML}])
+        with self.assertRaisesRegex(RuntimeError, "CAPTCHA"):
+            client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
+        self.assertEqual(client.page.submits, MAX_RETRIES)
+
+    def test_resultado_vazio_legitimo_nao_repete(self):
+        """Busca sem resultados no período é válida — não é CAPTCHA ruim."""
+        client = _CaptchaRetryClient([
+            {"html": "<div class='sem-resultado'><p>Nenhum documento.</p></div>"},
+        ])
+        results = client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
+        self.assertEqual(results, [])
+        self.assertEqual(client.page.submits, 1)
+
+    def test_captcha_invalido_na_paginacao_repete_a_pagina(self):
+        client = _CaptchaRetryClient(
+            [{"html": _result_rows(_numbers(0, 50))}],
+            scripted_pages=[
+                {"html": CAPTCHA_ERROR_HTML},
+                {"html": _result_rows(_numbers(50, 20))},
+            ],
+        )
+        results = client.search_processes("MMULHERES", "U", "01/09/2026", "22/09/2026")
+        self.assertEqual(len(results), 70)
+
+    def test_captcha_invalido_persistente_na_paginacao_falha(self):
+        client = _CaptchaRetryClient(
+            [{"html": _result_rows(_numbers(0, 50))}],
+            scripted_pages=[{"html": CAPTCHA_ERROR_HTML}],
+        )
+        with self.assertRaisesRegex(RuntimeError, "CAPTCHA"):
+            client.search_processes("MMULHERES", "U", "01/09/2026", "22/09/2026")
 
 
 class _HeaderPage:

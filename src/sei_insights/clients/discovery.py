@@ -34,6 +34,33 @@ def expected_total(data: dict) -> int:
         return 0
 
 
+# Textos que o SEI usa para rejeitar o CAPTCHA (HTTP 200). Variantes vistas em
+# produção: "Código de confirmação inválido 1.", "Código de confirmação inválido".
+CAPTCHA_ERROR_PATTERNS = (
+    r"c[oó]digo de confirma[çc][ãa]o inv[aá]lido",
+    r"confirma[çc][ãa]o inv[aá]lido",
+    r"captcha inv[aá]lido",
+    r"c[oó]digo de seguran[çc]a inv[aá]lido",
+)
+
+
+def is_captcha_error(data: dict) -> bool:
+    """Indica se a resposta AJAX é um CAPTCHA rejeitado (não "sem resultados").
+
+    Quando o OCR erra o CAPTCHA, o SEI NÃO responde 4xx: responde 200 com o
+    HTML de erro dentro de `.sem-resultado`, que o parser de resultados lê
+    como "nenhum processo encontrado". Sem esta detecção a busca reporta 0
+    resultados silenciosamente (bug real: período de 3 meses voltou vazio).
+
+    Retorna False para busca legitimamente vazia ("Nenhum documento
+    localizado.") — essa é a diferença entre "erro" e "não encontrado".
+    """
+    html = (data or {}).get("html", "") or ""
+    if not html:
+        return False
+    return any(re.search(pattern, html, re.IGNORECASE) for pattern in CAPTCHA_ERROR_PATTERNS)
+
+
 def pagination_params(inicio: int, rows_solr: int = 50) -> dict:
     return {"isPaginacao": "true", "inicio": inicio, "rowsSolr": rows_solr}
 
