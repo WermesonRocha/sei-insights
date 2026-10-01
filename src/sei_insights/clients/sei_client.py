@@ -16,6 +16,8 @@ from sei_insights.config import DEFAULT_TIMEOUT_MS
 
 from sei_insights.clients.captcha_solver import CaptchaSolver
 from sei_insights.clients.discovery import (
+    PROCESS_NUMBER_PATTERN,
+    _numero_processo_da_linha,
     count_rows,
     expected_total,
     extract_process_number,
@@ -96,14 +98,24 @@ def _unidade_matches(candidate: str, wanted: str) -> bool:
 
 
 def _is_process_number(value: str) -> bool:
-    """Diz se o valor parece um número de processo SEI (NNNNN.NNNNNN/YYYY-NN).
+    """Diz se o valor parece um número de processo SEI.
+
+    Reusa `discovery.PROCESS_NUMBER_PATTERN` em vez de repetir o formato aqui.
+    Havia uma segunda cópia deste padrão neste arquivo, com a largura de prefixo
+    divergente da de lá: as duas divergiam para o mesmo texto, e foi
+    assim que um número de processo válido passou a ser truncado num número
+    que não existe. Formato tem um lugar só.
 
     Linhas de documento da busca têm `data-prot` = número do documento
     (ex.: 64534686), que não casa com o formato de processo; usamos isso
     para preferir o número real de processo quando navegamos o mesmo link.
     """
-    return bool(re.fullmatch(r"\d{4,5}\.\d{6,8}/\d{4}-\d{2}",
-                             normalize_process_number(value)))
+    return bool(
+        re.fullmatch(
+            PROCESS_NUMBER_PATTERN,
+            normalize_process_number(value),
+        )
+    )
 
 
 class CriteriosNaoAplicados(RuntimeError):
@@ -193,19 +205,42 @@ class PublicDocument:
 
 
 def extract_process(html: str, requested_number: str) -> Optional[ProcessResult]:
-    """Extrai processo do HTML correspondente ao número solicitado."""
+    """Extrai processo do HTML correspondente ao número solicitado.
+
+    O SEI não marca o número do PROCESSO em `data-prot`: ele traz o número do
+    DOCUMENTO (61941158). O número do processo está no texto da linha de
+    resultado, no formato NNNNN.NNNNNN/YYYY-NN (ver
+    `discovery._numero_processo_da_linha`, que faz a mesma leitura).
+
+    Procurar só por `data-prot` não achava nada: o resultado era `url=""` e a
+    navegação seguinte falhava com "Cannot navigate to invalid URL" para todos
+    os processos da busca.
+    """
     soup = BeautifulSoup(html, "html.parser")
-    # Tenta encontrar pelo atributo data-prot
+    numero = normalize_process_number(requested_number)
+
+    # 1. data-prot já no formato de processo (variante que o SEI usa em
+    #    algumas telas).
     for row in soup.select("[data-prot]"):
-        prot = row.get("data-prot", "").strip()
-        if normalize_process_number(prot) == normalize_process_number(requested_number):
+        prot = normalize_process_number(row.get("data-prot", "").strip())
+        if prot == numero:
             link = row.select_one("a[href*='md_pesq_processo_exibir.php']")
             if link:
-                return ProcessResult(
-                    number=normalize_process_number(requested_number),
-                    url=link.get("href", ""),
-                    title=link.get_text(strip=True)
-                )
+                return ProcessResult(number=numero,
+                                     url=link.get("href", ""),
+                                     title=link.get_text(strip=True))
+
+    # 2. Número do processo no TEXTO da linha de resultado, que é onde o SEI o
+    #    coloca de fato.
+    for row in soup.select("tr, [data-prot]"):
+        link = row.select_one("a[href*='md_pesq_processo_exibir.php']")
+        if link is None:
+            continue
+        achado = _numero_processo_da_linha(row)
+        if achado and normalize_process_number(achado) == numero:
+            return ProcessResult(number=numero,
+                                 url=link.get("href", ""),
+                                 title=link.get_text(strip=True))
     return None
 
 
