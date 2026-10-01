@@ -89,10 +89,11 @@ O fluxo de execução é o seguinte:
 
 ```
 busca por unidade + período (+ 3 tipos de pesquisa marcados)
-  → linhas de resultado (processos E documentos — 1 linha por documento)
+  → linhas de resultado (itens: processos E documentos — 1 linha por item)
   → dedupe pela URL do processo → 1 resultado por processo
-    (o "total" do SEI conta LINHAS: processos E documentos — por isso
-     183 linhas podem virar 67 processos; ver "Como funciona")
+    (o "total" do SEI conta LINHAS, não processos: várias linhas podem
+     apontar para o mesmo processo-pai, então o total que ele informa é
+     sempre ≥ o número de linhas da planilha — ver "Como funciona")
   → número canônico do processo (cabeçalho "Processo:" da página pública)
   → diff com o espelho anterior (SQLite) → "novos"
   → para cada processo:
@@ -124,23 +125,30 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    colapsam em um único resultado. Sem isso, um processo descoberto por
    N documentos era visitado e baixado N vezes (bug real).
 
-   > **Por que o SEI informa 183 e a planilha tem 67 processos?**
+   > **Por que o total que o SEI informa é maior que o número de linhas
+   > da planilha?**
    >
    > São grandezas diferentes, e a diferença **não** é perda de coleta.
    >
-   > - **183** é o total de **linhas** que o SEI casou (`data.itens`);
-   > - **67** é o total de **processos únicos** depois da dedupe.
+   > - o total do SEI (`data.itens`) conta **linhas**, isto é, **itens**
+   >   casados pela pesquisa;
+   > - a planilha tem **uma linha por processo único**, depois da dedupe.
    >
    > Como a pesquisa marca **Processos + Documentos Gerados + Documentos
    > Recebidos**, cada linha é um *item* encontrado, e vários itens podem
    > pertencer ao **mesmo processo-pai**. Um processo com três documentos
-   > na árvore pode gerar três linhas apontando para a mesma página dele.
+   > na árvore gera três linhas apontando para a mesma página dele, que
+   > viram **uma** só linha na planilha.
    >
-   > Medido em 01/01/2026 a 31/03/2026: 183 linhas para 67 processos, uma
-   > média de **2,73 linhas por processo**. Os 67 processos são o total
-   > real; o número 183 descreve o volume de itens, não o de processos.
+   > *Exemplo hipotético:* se o SEI casar **183 linhas** e elas se
+   > distribuírem por **67 processos-pai**, a planilha sai com 67 linhas —
+   > média de ~2,7 linhas por processo. A razão **não tem valor fixo**:
+   > depende de quantos documentos cada processo tem e do período
+   > pesquisado. O que é fixo é a **relação**: o total do SEI é sempre
+   > **igual ou maior** que o da planilha, e a diferença é inteiramente
+   > explicada pelas linhas repetidas do mesmo processo-pai.
    >
-   > Por isso o log das duas grandezas separadamente:
+   > Por isso o log reporta as duas grandezas separadamente:
    >
    > ```
    > SEI informou 183 resultado(s) no total; a primeira página trouxe 47 linha(s).
@@ -149,6 +157,9 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    >   ...
    > Busca concluída: 5 página(s) lida(s), 67 processo(s) único(s), 183 linha(s) lida(s) de 183 informada(s).
    > ```
+   >
+   > (O exemplo acima usa os mesmos números do caso real de
+   > 01/01/2026 a 31/03/2026; numa execução qualquer os valores mudam.)
    >
    > A contagem de páginas **não é um número fixo**: depende de quantas
    > linhas o SEI devolve em cada requisição. O que precisa fechar é a soma
@@ -168,9 +179,10 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    três tipos de pesquisa estão marcados, uma página cheia de 50 linhas pode
    conter bem menos processos: documentos do mesmo processo repetem o número
    nas linhas seguintes. Encerrar o laço comparando o total de processos
-   **únicos** com 50 fazia uma página de 50 linhas com 22 processos parecer
-   a última — o coletor parava na primeira página e devolvia 22 processos
-   sem nenhum aviso (bug real, período 01/01/2026 a 31/03/2026).
+   **únicos** com o tamanho da página fazia a primeira página parecer a
+   última sempre que ela trouxesse menos de 50 processos distintos — o
+   coletor parava na primeira página e devolvia um recorte incompleto sem
+   nenhum aviso (bug real).
 
    **O total do SEI é a régua, e ele vem em `data.itens`.** O JS da própria
    página de pesquisa é a autoridade do contrato:
@@ -192,13 +204,14 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    rejeitado) o laço ainda cai no critério antigo de página cheia.
 
    **O offset avança pelas linhas lidas, nunca por `page_size`.** Uma
-   página pode vir curta — no caso real, a primeira trouxe 47 linhas de 50
-   — e somar `50` ao offset pularia para sempre as linhas de posição 47,
-   48 e 49. Isso dava 180 linhas lidas contra 183 informadas (bug real,
-   mesma execução). Somando o **tamanho real da página anterior**, nenhum
-   offset é pulado: somando o **tamanho real da página anterior**, a soma das
-   linhas passa a fechar com o total informado. Uma página cheia continua
-   avançando 50, então o caso comum não muda.
+   página pode vir curta — é comum a primeira vir com menos linhas que o
+   `rowsSolr` pedido — e somar `50` ao offset pularia para sempre as linhas
+   do intervalo entre o fim da página e o salto. No caso real isso dava
+   180 linhas lidas contra 183 informadas (bug real, mesma execução de
+   01/01/2026 a 31/03/2026). Somando o **tamanho real da página anterior**
+   ao offset, nenhum intervalo é pulado e a soma das linhas fecha com o
+   total informado. Uma página cheia continua avançando 50, então o caso
+   comum não muda.
 
    Cada execução registra uma linha por página com o `offset` pedido, as
    `linha(s)` recebidas e o `acumulado`, e fecha com
@@ -208,11 +221,11 @@ busca por unidade + período (+ 3 tipos de pesquisa marcados)
    truncar calado.
 
    **O log é a auditoria, não a decoração.** Como a dedupe apaga a
-   distinção entre "processo visto por 3 linhas" e "processo nunca
+   distinção entre "processo visto por três linhas" e "processo nunca
    visto", o total de processos é cego a linhas faltantes: duas execuções
    com buracos diferentes podem reportar o mesmo número de processos. Por
    isso a conferência de cobertura é a **soma das linhas lidas contra
-   `data.itens`**, e é ela que precisa fechar em 183 — não o 67.
+   `data.itens`**, e é ela que precisa fechar — não o total de processos.
 
    **CAPTCHA rejeitado não é "sem resultados".** Quando o OCR erra o código,
    o SEI **não** responde 4xx: responde **HTTP 200** com o HTML de erro
