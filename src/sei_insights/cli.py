@@ -19,7 +19,7 @@ from sei_insights.storage.mirror import MirrorStore, ProcessRow, despacho_hash
 from sei_insights.clients.rate_limit import RateLimiter
 from sei_insights.config.rules import RulesEngine
 from sei_insights.documents.text_ing import extract_text_from_pdf
-from sei_insights.documents.tree import parse_tree, select_last_despacho
+from sei_insights.documents.tree import despachos_ordenados, parse_tree
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)-8s | %(message)s",
@@ -222,12 +222,29 @@ def analyze_process(
     despacho e, só quando necessário, baixa o PDF e classifica o texto.
     O hash identifica o despacho (número|data), nunca o texto: assim um
     PDF digitalizado não congela o cache.
+
+    FALLBACK: o Despacho mais recente pode existir na árvore e mesmo assim não
+    ter download público (documento restrito — o SEI esconde o link). Nesses
+    casos tentamos os Despachos anteriores, em ordem decrescente de data, até
+    um que o SEI ofereça. Gravar "Sem despacho público" logo ali perderia o
+    andamento de um processo que tem despacho público duas linhas abaixo.
+
+    A data gravada é a do Despacho REALMENTE lido, não a do restrito: a
+    classificação vem do documento que foi lido, e atribuir a data de outro
+    colocaria na planilha um marco temporal que ninguém leu. O aviso no log
+    nomeia os dois, então a diferença fica registrada.
+
+    Limitação conhecida: o cache é pela identidade do Despacho mais recente, e
+    ele é conferido ANTES de qualquer download. Se o Despacho mais recente for
+    restrito hoje e virar público amanhã, a execução seguinte reaproveita o
+    cache e continua lendo o anterior, sem tentar o novo — só um movimento do
+    processo faz o fallback ser reavaliado.
     """
     html = client.open_process(p)
     nodes = parse_tree(html)
-    despacho = select_last_despacho(nodes)
+    candidatos = despachos_ordenados(nodes)
 
-    if despacho is None:
+    if not candidatos:
         # Sem despacho na árvore: não há o que baixar.
         #
         # O processo continua sendo gravado na planilha, com a situação
@@ -252,7 +269,11 @@ def analyze_process(
             status_coleta="concluído", hash_ultimo_despacho="",
         )
 
-    identificador = f"{despacho.numero}|{despacho.data}"
+    # A identidade do cache é a do Despacho MAIS RECENTE, não a do que acabar
+    # sendo lido: assim "o processo não se moveu" dispensa download mesmo
+    # quando o mais recente é restrito e a leitura sempre cai no anterior.
+    mais_recente = candidatos[0]
+    identificador = f"{mais_recente.numero}|{mais_recente.data}"
     novo_hash = despacho_hash(identificador)
 
     if prev is not None and not force and prev.hash_ultimo_despacho == novo_hash:
@@ -266,14 +287,20 @@ def analyze_process(
             hash_ultimo_despacho=novo_hash,
         )
 
-    # O download do despacho é por CLIQUE no link da árvore do SEI
-    # (download_despacho). Sem link público, o despacho é tratado como
-    # sem download possível, sem tentar rede.
-    result = client.download_despacho(
-        p.number, despacho.numero, despacho.serie,
-    )
+    # O download é por CLIQUE no link da árvore do SEI (download_despacho).
+    # Sem link público, aquele despacho é pulado e o próximo da lista é
+    # tentado; se nenhum servir, o processo vira "Sem despacho público".
+    lido = None
+    result = None
+    for despacho in candidatos:
+        result = client.download_despacho(
+            p.number, despacho.numero, despacho.serie,
+        )
+        if result is not None:
+            lido = despacho
+            break
 
-    if result is None:
+    if lido is None:
         # Mesmo tratamento do caso acima: o despacho existe na árvore, mas o
         # SEI não oferece download público dele. Também gera registro sem PDF.
         return ProcessRow(
@@ -281,6 +308,18 @@ def analyze_process(
             situacao="Sem despacho público", destino="", acao_esperada="",
             pendencia_curta="", link_process=p.url,
             status_coleta="concluído", hash_ultimo_despacho="",
+        )
+
+    if lido is not mais_recente:
+        logger.warning(
+            "Despacho mais recente (%s, %s) não tem download público. "
+            "Classifiquei o Despacho anterior (%s, %s), que é público — a "
+            "data gravada é a do documento lido. Se este processo andou "
+            "depois de %s, o andamento real está mais adiantado do que a "
+            "planilha mostra.",
+            mais_recente.numero, mais_recente.data or "(sem data)",
+            lido.numero, lido.data or "(sem data)",
+            lido.data or "(sem data)",
         )
 
     path, _, _ = result
@@ -298,7 +337,7 @@ def analyze_process(
 
     return ProcessRow(
         numero=p.number, data_execucao=now,
-        data_ultimo_despacho=despacho.data,
+        data_ultimo_despacho=lido.data,
         situacao=situacao, destino=destino, acao_esperada=acao_esperada,
         pendencia_curta=pendencia_curta, link_process=p.url,
         status_coleta="concluído", hash_ultimo_despacho=novo_hash,

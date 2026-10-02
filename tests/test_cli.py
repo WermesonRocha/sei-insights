@@ -267,14 +267,17 @@ def rules_deterministicas():
 
 class FakeClient:
     def __init__(self, html="", docs=None, pdf_path=None, download_err=None,
-                 despacho_link=True):
+                 despacho_link=True, publicos=None):
         self.html = html
         self.docs = docs or []
         self.pdf_path = pdf_path
         self.download_err = download_err
         self.despacho_link = despacho_link
+        # Números com download público. None = `despacho_link` vale para todos.
+        self.publicos = publicos
         self.open_process_calls = 0
         self.download_calls = 0
+        self.tentados = []
 
     def open_process(self, p):
         self.open_process_calls += 1
@@ -283,11 +286,17 @@ class FakeClient:
     def extract_documents(self, html, url):
         return self.docs
 
+    def _publico(self, numero):
+        if self.publicos is not None:
+            return numero in self.publicos
+        return self.despacho_link
+
     def download_despacho(self, process_number, numero, serie):
         self.download_calls += 1
+        self.tentados.append(numero)
         if self.download_err is not None:
             raise self.download_err
-        if not self.despacho_link:
+        if not self._publico(numero):
             return None
         return self.pdf_path, "sha256", "application/pdf"
 
@@ -302,6 +311,125 @@ def temp_pdf(tmp: str, name: str, b64: str) -> Path:
     path = Path(tmp) / name
     path.write_bytes(base64.b64decode(b64))
     return path
+
+
+class FallbackDespachoRestritoTest(unittest.TestCase):
+    """Despacho mais recente sem download público → tenta o anterior público.
+
+    O SEI esconde documentos restritos: o Despacho existe na árvore, mas não
+    oferece download público dele. Sem fallback, o processo era gravado como
+    "Sem despacho público" e perdia o andamento mesmo tendo um Despacho
+    público duas linhas abaixo — a planilha subestimava a situação do processo.
+
+    A data gravada é a do Despacho REALMENTE LIDO, com aviso no log dizendo
+    qual era o mais recente. Gravar a data do restrito sem tê-lo lido
+    colocaria na planilha uma data que ninguém leu, e a classificação viria
+    de outro documento sem nada na planilha indicating isso.
+    """
+
+    NOW = "2026-09-22 10:00:00"
+
+    def setUp(self):
+        self.rules = rules_deterministicas()
+        self.p = pr("21260.003436/2026-15")
+
+    def _client(self, tmp, publicos, b64=PDF_WITH_TEXT_B64):
+        return FakeClient(
+            html=TREE_WITH_DESPACHO,
+            docs=docs_correlacionados(),
+            pdf_path=temp_pdf(tmp, "d.pdf", b64) if b64 else None,
+            publicos=publicos,
+        )
+
+    def test_usa_o_despacho_anterior_quando_o_mais_recente_e_restrito(self):
+        """O mais recente (100003, 15/09) sem link → lê o 100002, de 10/09."""
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, publicos={"100002"})
+            r = analyze_process(client, self.p, None, False, self.NOW, self.rules)
+
+        self.assertEqual(r.data_ultimo_despacho, "10/09/2026")
+        self.assertEqual(r.situacao, "SCIENTIA CIENCIA")
+        self.assertEqual(r.status_coleta, "concluído")
+
+    def test_hash_de_cache_identifica_o_mais_recente_nao_o_lido(self):
+        """O hash é do mais recente, e é ele que faz o cache valer.
+
+        Se o hash fosse do Despacho lido, a execução seguinte compararia o
+        hash guardado (100002) com o do mais recente (100003), nunca
+        bateria, e o processo seria baixado de novo toda vez — com o
+        fallback ainda tentando o restrito antes de chegar no público.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, publicos={"100002"})
+            r = analyze_process(client, self.p, None, False, self.NOW, self.rules)
+        self.assertEqual(r.hash_ultimo_despacho,
+                         despacho_hash("100003|15/09/2026"))
+
+    def test_processo_que_nao_andou_nao_baixa_de_novo_mesmo_com_fallback(self):
+        """Segunda execução do mesmo processo: cache, sem tocar na rede."""
+        with tempfile.TemporaryDirectory() as tmp:
+            primeira = self._client(tmp, publicos={"100002"})
+            r = analyze_process(primeira, self.p, None, False, self.NOW, self.rules)
+
+            segunda = self._client(tmp, publicos={"100002"})
+            r2 = analyze_process(segunda, self.p, r, False, self.NOW, self.rules)
+
+        self.assertEqual(segunda.download_calls, 0)
+        self.assertEqual(r2.status_coleta, "concluído (cache)")
+        self.assertEqual(r2.data_ultimo_despacho, "10/09/2026")
+        self.assertEqual(r2.situacao, r.situacao)
+
+    def test_avisa_o_mais_recente_e_o_que_foi_lido(self):
+        """O aviso tem que nomear os dois, senão o fallback é invisível.
+
+        Sem o aviso, a planilha mostra 10/09 e não há como saber que existe
+        um Despacho de 15/09 que não foi lido.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, publicos={"100002"})
+            with self.assertLogs("sei-insights", level="WARNING") as cap:
+                analyze_process(client, self.p, None, False, self.NOW, self.rules)
+
+        aviso = "\n".join(cap.output)
+        self.assertIn("100003", aviso)   # o restrito, que não foi lido
+        self.assertIn("15/09/2026", aviso)
+        self.assertIn("100002", aviso)   # o público, que foi lido
+        self.assertIn("10/09/2026", aviso)
+
+    def test_todos_restritos_continua_sem_despacho_publico(self):
+        """Sem nenhum público, o resultado é o de antes: "Sem despacho público"."""
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, publicos=set())
+            r = analyze_process(client, self.p, None, False, self.NOW, self.rules)
+
+        self.assertEqual(r.situacao, "Sem despacho público")
+        self.assertEqual(r.data_ultimo_despacho, "")
+        self.assertEqual(r.hash_ultimo_despacho, "")
+
+    def test_tentativas_param_no_primeiro_que_funciona(self):
+        """Com dois públicos, não sai caçando o terceiro depois do segundo.
+
+        Gasta CAPTCHA e rede à toa, e o resultado seria o mesmo.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, publicos={"100002", "100003"})
+            analyze_process(client, self.p, None, False, self.NOW, self.rules)
+        self.assertEqual(client.download_calls, 1)
+
+    def test_fallback_nao_tenta_mais_que_os_despachos_da_arvore(self):
+        """Tenta uma vez por Despacho e desiste: a lista é finita."""
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, publicos=set())
+            analyze_process(client, self.p, None, False, self.NOW, self.rules)
+        self.assertEqual(client.download_calls, 2)  # 100003 e 100002
+
+    def test_mais_recente_publico_nao_toca_no_anterior(self):
+        """O caminho comum não muda: uma tentativa só, a do mais recente."""
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, publicos={"100002", "100003"})
+            r = analyze_process(client, self.p, None, False, self.NOW, self.rules)
+        self.assertEqual(r.data_ultimo_despacho, "15/09/2026")
+        self.assertEqual(client.download_calls, 1)
 
 
 class AnalyzePipelineTest(unittest.TestCase):

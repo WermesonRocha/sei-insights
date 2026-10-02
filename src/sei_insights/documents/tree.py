@@ -189,67 +189,79 @@ def _corresponds_to_numbered(label: str) -> bool:
     return NUM_RE.search(label) is None
 
 
-def select_last_despacho(nodes: list[DocNode]) -> Optional[DocNode]:
-    """Escolhe o Despacho mais RECENTE, que é o andamento atual do processo.
+def despachos_ordenados(nodes: list[DocNode]) -> list[DocNode]:
+    """Despachos candidatos a "último", do MAIS RECENTE ao mais antigo.
 
-    A comparação é cronológica (`_data_ordem`), não textual: em
-    `dd/mm/aaaa` a comparação de string faz o despacho mais antigo vencer
-    sempre que o dia muda de dezena, e o script passa a reportar um
-    andamento antigo como se fosse o atual.
+    A lista existe para o fallback: o Despacho mais recente pode não ter
+    download público (restrito), e nesse caso o processo ainda tem andamento
+    a ler em um Despacho anterior, público. Ler o mais antigo possível é pior
+    que ler o anterior, então a ordem tem de ser a mesma da escolha única:
+    cronológica, com desempate pela posição.
 
-    O desempate é pela posição na árvore, de modo que dois despachos
-    incluídos no mesmo dia escolham o que está mais abaixo na lista.
-    A árvore não é ordem cronológica garantida, então a posição serve
-    apenas para desempatar — nunca para escolher.
-
-    Despacho sem data legível é DESCARTADO quando existe algum datado.
-    Isso é deliberado: sem data não há como ordenar contra datas reais
-    sem inventar critério, e promover um nó sem data poderia trocar o
-    andamento correto por um Unknown. A posição na árvore só decide
-    quando nenhum Despacho tem data. O descarte é avisado no log, porque
-    é a diferença entre "este processo parou em 30/06" e "o despacho de
-    05/07 veio sem data e foi ignorado" — falhas que seem iguais na
-    planilha e exigem ações opostas.
+    Despacho sem data legível é DESCARTADO quando existe algum datado. É
+    deliberado: sem data não há como ordenar contra datas reais sem inventar
+    critério, e promover um nó sem data poderia trocar o andamento correto por
+    um Unknown. A posição na árvore só decide quando nenhum Despacho tem data.
+    O descarte é avisado no log, porque é a diferença entre "este processo parou
+    em 30/06" e "o despacho de 05/07 veio sem data e foi ignorado" — falhas que
+    seem iguais na planilha e exigem ações opostas.
     """
     despachos = [n for n in nodes if "Despacho" in n.serie]
     if not despachos:
-        return None
+        return []
 
     dated = [d for d in despachos if d.data]
     sem_data = [d for d in despachos if not d.data]
 
-    if not dated:
-        if not sem_data:
-            return None
-        # Sem uma única data não há ordenação possível: a posição na árvore
-        # é o único critério, e ela vale menos que uma data real.
-        escolhido = max(sem_data, key=lambda n: n.posicao)
-        log.warning(
-            "Nenhum dos %d Despacho(s) da árvore tem data legível. "
-            "Escolhido por posição: %s[%d]. Sem data não dá para comparar "
-            "com o histórico de andamentos anteriores, então a "
-            "classificação deste processo fica menos confiável.",
-            len(sem_data), escolhido.numero, escolhido.posicao,
+    if dated:
+        # Cronológica, e não textual: em `dd/mm/aaaa` a comparação de string
+        # faz o despacho mais antigo vencer sempre que o dia muda de dezena
+        # ("30/06" > "05/07"), e o script passa a reportar um andamento antigo
+        # como se fosse o atual. Empate de data vai para o ÚLTIMO da árvore
+        # (maior `posicao`): o SEI traz só dia/mês/ano, sem hora, então a
+        # posição é a melhor aproximação para desempatar. Medido em 40
+        # processos abertos ao vivo: 4 (10%) tinham 2+ Despachos na data mais
+        # recente, e o desempate por posição maior escolheu o mesmo em todos.
+        candidatos = sorted(
+            dated,
+            key=lambda n: (_data_ordem(n.data), n.posicao),
+            reverse=True,
         )
-        return escolhido
+        if sem_data:
+            numeros = ", ".join(
+                f"{d.numero or '(sem número)'}[{d.posicao}]" for d in sem_data
+            )
+            log.warning(
+                "Descartei %d Despacho(s) sem data legível que podem ser mais "
+                "recentes: %s. Escolhi %s, de %s, por ser datado. "
+                "Se este processo andou depois de %s, confira a coluna "
+                "'Data de Inclusão' da árvore no SEI — pode haver um despacho "
+                "mais recente que o script não conseguiu ler.",
+                len(sem_data), numeros, candidatos[0].numero,
+                candidatos[0].data, candidatos[0].data,
+            )
+        return candidatos
 
-    escolhido = max(dated, key=lambda n: (_data_ordem(n.data), n.posicao))
-    # Empate de data: vale o ÚLTIMO da árvore (maior `posicao`). A árvore do
-    # SEI traz só dia/mês/ano, sem hora, então a posição é a melhor
-    # aproximação disponível para desempatar. Medido em 40 processos abertos
-    # ao vivo: 4 deles (10%) tinham 2+ Despachos na data mais recente, e o
-    # desempate por posição maior escolheu o mesmo em todos.
-    if sem_data:
-        numeros = ", ".join(
-            f"{d.numero or '(sem número)'}[{d.posicao}]" for d in sem_data
-        )
-        log.warning(
-            "Descartei %d Despacho(s) sem data legível que podem ser mais "
-            "recentes: %s. Escolhi %s, de %s, por ser datado. "
-            "Se este processo andou depois de %s, confira a coluna "
-            "'Data de Inclusão' da árvore no SEI — pode haver um despacho "
-            "mais recente que o script não conseguiu ler.",
-            len(sem_data), numeros, escolhido.numero, escolhido.data,
-            escolhido.data,
-        )
-    return escolhido
+    if not sem_data:
+        return []
+
+    # Sem uma única data não há ordenação possível: a posição na árvore é o
+    # único critério, e ela vale menos que uma data real.
+    candidatos = sorted(sem_data, key=lambda n: n.posicao, reverse=True)
+    log.warning(
+        "Nenhum dos %d Despacho(s) da árvore tem data legível. "
+        "Escolhido por posição: %s[%d]. Sem data não dá para comparar "
+        "com o histórico de andamentos anteriores, então a "
+        "classificação deste processo fica menos confiável.",
+        len(sem_data), candidatos[0].numero, candidatos[0].posicao,
+    )
+    return candidatos
+
+
+def select_last_despacho(nodes: list[DocNode]) -> Optional[DocNode]:
+    """Escolhe o Despacho mais RECENTE, que é o andamento atual do processo.
+
+    É o primeiro de `despachos_ordenados`, que concentra a regra de ordenação.
+    """
+    candidatos = despachos_ordenados(nodes)
+    return candidatos[0] if candidatos else None

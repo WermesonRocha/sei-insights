@@ -4,7 +4,8 @@ import unittest
 from unittest import mock
 
 from sei_insights.documents.tree import (
-    DocNode, correlate_urls, parse_tree, select_last_despacho,
+    DocNode, correlate_urls, despachos_ordenados, parse_tree,
+    select_last_despacho,
 )
 
 HTML = """
@@ -590,3 +591,80 @@ class DespachoSemDataTest(unittest.TestCase):
 
         self.assertEqual(despacho.numero, "64530001")
         self.assertIn("64530002", "\n".join(cap.output))
+
+
+class CandidatosDespachoTest(unittest.TestCase):
+    """`despachos_ordenados`: a lista de tentativas, do mais novo ao mais velho.
+
+    O fallback (usar um Despacho mais antigo quando o mais recente não tem
+    download público) só funciona se a ordem for a mesma que a escolha atual:
+    data primeiro, desempate pela posição. Aqui testamos a ORDEM, que é o que
+    faz o fallback cair no documento certo e não no mais antigo da árvore.
+    """
+
+    def _nodes(self, *pares):
+        return [
+            DocNode(serie="Despacho", numero=numero, data=data, posicao=i)
+            for i, (data, numero) in enumerate(pares)
+        ]
+
+    def test_ordena_do_mais_recente_para_o_mais_antigo(self):
+        nodes = self._nodes(
+            ("10/09/2026", "100002"),
+            ("15/09/2026", "100003"),
+            ("01/09/2026", "100001"),
+        )
+        candidatos = despachos_ordenados(nodes)
+        self.assertEqual([c.numero for c in candidatos],
+                         ["100003", "100002", "100001"])
+
+    def test_ordena_por_data_cronologica_e_nao_por_texto(self):
+        """30/06 é anterior a 05/07; por texto o mais novo viraria o primeiro."""
+        nodes = self._nodes(
+            ("05/07/2026", "novo"),
+            ("30/06/2026", "antigo"),
+        )
+        candidatos = despachos_ordenados(nodes)
+        self.assertEqual([c.numero for c in candidatos], ["novo", "antigo"])
+
+    def test_empate_de_data_por_posicao_maior_primeiro(self):
+        nodes = self._nodes(
+            ("15/09/2026", "primeiro"),
+            ("15/09/2026", "ultimo"),
+        )
+        candidatos = despachos_ordenados(nodes)
+        self.assertEqual([c.numero for c in candidatos], ["ultimo", "primeiro"])
+
+    def test_sem_data_so_entra_na_lista_quando_nenhum_tem_data(self):
+        """Sem data não é ordem: só vira candidato se não houver data nenhuma."""
+        com_data = self._nodes(("15/09/2026", "100003"), ("", "100009"))
+        with self.assertLogs("sei-insights", level="WARNING") as cap:
+            candidatos = despachos_ordenados(com_data)
+        self.assertEqual([c.numero for c in candidatos], ["100003"])
+        self.assertIn("100009", "\n".join(cap.output))
+
+    def test_sem_data_algum_ordena_por_posicao(self):
+        so_sem_data = self._nodes(("", "100001"), ("", "100003"))
+        with self.assertLogs("sei-insights", level="WARNING"):
+            candidatos = despachos_ordenados(so_sem_data)
+        self.assertEqual([c.numero for c in candidatos], ["100003", "100001"])
+
+    def test_nao_e_despacho_nao_entra(self):
+        nodes = [
+            DocNode(serie="Ofício", numero="100004", data="16/09/2026", posicao=0),
+            DocNode(serie="Despacho", numero="100002", data="10/09/2026", posicao=1),
+        ]
+        candidatos = despachos_ordenados(nodes)
+        self.assertEqual([c.numero for c in candidatos], ["100002"])
+
+    def test_sem_despacho_devolve_lista_vazia(self):
+        self.assertEqual(despachos_ordenados([]), [])
+        self.assertIsNone(select_last_despacho([]))
+
+    def test_select_last_despacho_continua_pegando_o_primeiro(self):
+        """`select_last_despacho` não muda: é o primeiro da lista de candidatos."""
+        nodes = self._nodes(
+            ("10/09/2026", "100002"),
+            ("15/09/2026", "100003"),
+        )
+        self.assertEqual(select_last_despacho(nodes).numero, "100003")
