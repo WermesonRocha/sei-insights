@@ -5,7 +5,7 @@ from unittest import mock
 
 from sei_insights.documents.tree import (
     DocNode, correlate_urls, despachos_ordenados, parse_tree,
-    select_last_despacho,
+    processo_encerrado, select_last_despacho,
 )
 
 HTML = """
@@ -145,6 +145,60 @@ class TreeTest(unittest.TestCase):
         self.assertIsNotNone(despacho)
         self.assertEqual(despacho.numero, "64530003")
         self.assertEqual(despacho.data, "29/09/2026")
+
+
+TERMO_ENCERRAMENTO = "Termo de Encerramento de Processo Eletrônico 100005 - 01/10/2026"
+
+
+class ProcessoEncerradoTest(unittest.TestCase):
+    """Um Termo de Encerramento como ÚLTIMO documento fecha o processo.
+
+    O SEI registra o encerramento com um "Termo de Encerramento de Processo
+    Eletrônico". Quando ele é a última linha da árvore, o processo acabou e
+    não faz sentido baixar/classificar despacho — a situação vem do próprio
+    encerramento. Se houver qualquer documento depois dele, o processo está
+    em andamento normal e a detecção não pode disparar.
+    """
+
+    def test_parse_captura_o_titulo_completo(self):
+        """`serie` guarda só a 1ª palavra; o título completo é o que identifica."""
+        nodes = parse_tree(HTML)
+        desp = [n for n in nodes if n.serie == "Despacho"]
+        self.assertEqual(desp[0].titulo, "Despacho 100002 - 10/09/2026")
+
+    def test_termo_no_fim_marca_encerrado(self):
+        html = HTML.replace(
+            '<span class="infraLabel">Ofício 100004 - 16/09/2026</span>',
+            f'<span class="infraLabel">{TERMO_ENCERRAMENTO}</span>',
+        )
+        node = processo_encerrado(parse_tree(html))
+        self.assertIsNotNone(node)
+        self.assertEqual(node.numero, "100005")
+        self.assertEqual(node.data, "01/10/2026")
+
+    def test_termo_no_meio_nao_marca_encerrado(self):
+        html = HTML.replace(
+            '<span class="infraLabel">Ofício 100004 - 16/09/2026</span>',
+            f'<span class="infraLabel">{TERMO_ENCERRAMENTO}</span>\n'
+            '    </li>\n'
+            '    <li>\n'
+            '      <input type="checkbox" value="100006">\n'
+            '      <span class="infraLabel">Ofício 100006 - 02/10/2026</span>',
+        )
+        self.assertIsNone(processo_encerrado(parse_tree(html)))
+
+    def test_sem_termo_nao_marca_encerrado(self):
+        self.assertIsNone(processo_encerrado(parse_tree(HTML)))
+
+    def test_tabela_real_com_termo_no_titulo_da_serie(self):
+        """Na tabela real o tipo vem no `title` do link, sem nº nem data."""
+        html = REAL_HTML.replace(
+            'title="Despacho">64529993',
+            'title="Termo de Encerramento de Processo Eletrônico">64529993',
+        )
+        node = processo_encerrado(parse_tree(html))
+        self.assertIsNotNone(node)
+        self.assertEqual(node.data, "29/09/2026")
 
 
 class SelectUltimoDespachoDataTest(unittest.TestCase):

@@ -12,6 +12,7 @@ log = logging.getLogger("sei-insights")
 
 DATE_RE = re.compile(r"\b(\d{2}/\d{2}/\d{4})\b")
 NUM_RE = re.compile(r"\b(\d{5,})\b")
+TERMO_ENCERRAMENTO_RE = re.compile(r"termo\s+de\s+encerramento", re.IGNORECASE)
 
 
 def _data_ordem(valor: str) -> tuple[int, int, int]:
@@ -49,6 +50,10 @@ class DocNode:
     # não há download possível. `numero` é a chave que marca o checkbox, então
     # um nó não selecionável não tem número — ver `parse_tree`.
     selecionavel: bool = True
+    # Rótulo COMPLETO do documento (ex.: "Termo de Encerramento de Processo
+    # Eletrônico"). `serie` guarda só a 1ª palavra, o que basta para "Despacho",
+    # mas não distingue o Termo de Encerramento de outros "Termo ...".
+    titulo: str = ""
 
 
 def _checkbox_selecionavel(row) -> tuple[bool, str]:
@@ -188,6 +193,7 @@ def parse_tree(html: str) -> list[DocNode]:
                 data=data,
                 posicao=pos,
                 selecionavel=selecionavel,
+                titulo=label,
             )
         )
     return nodes
@@ -294,3 +300,23 @@ def select_last_despacho(nodes: list[DocNode]) -> Optional[DocNode]:
     """
     candidatos = despachos_ordenados(nodes)
     return candidatos[0] if candidatos else None
+
+
+def processo_encerrado(nodes: list[DocNode]) -> Optional[DocNode]:
+    """O Termo de Encerramento é o ÚLTIMO documento? Então o processo acabou.
+
+    O SEI fecha o processo com um "Termo de Encerramento de Processo
+    Eletrônico". Quando essa linha é a última da árvore, não há andamento
+    posterior a classificar: o processo está encerrado e baixar/ler despacho
+    seria gastar CAPTCHA para reportar uma situação que já não vale. Se
+    qualquer documento vier depois do Termo, o processo seguiu em andamento
+    — um Termo antigo não pode mascarar o despacho atual.
+
+    Devolve o nó do Termo (com data, quando houver) ou None.
+    """
+    if not nodes:
+        return None
+    ultimo = max(nodes, key=lambda n: n.posicao)
+    if TERMO_ENCERRAMENTO_RE.search(ultimo.titulo or ultimo.serie):
+        return ultimo
+    return None

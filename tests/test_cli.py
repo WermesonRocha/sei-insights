@@ -685,6 +685,93 @@ class AnalyzePipelineTest(unittest.TestCase):
         self.assertEqual(novos, rows)
 
 
+TREE_ENCERRADA = """
+<div class="infraArvore">
+  <ul>
+    <li>
+      <input type="checkbox" value="100002">
+      <span class="infraLabel">Despacho 100002 - 10/09/2026</span>
+    </li>
+    <li>
+      <input type="checkbox" value="100005">
+      <span class="infraLabel">Termo de Encerramento de Processo Eletrônico 100005 - 01/10/2026</span>
+    </li>
+  </ul>
+</div>
+"""
+
+TREE_ENCERRADA_COM_OFICIO_DEPOIS = """
+<div class="infraArvore">
+  <ul>
+    <li>
+      <input type="checkbox" value="100002">
+      <span class="infraLabel">Despacho 100002 - 10/09/2026</span>
+    </li>
+    <li>
+      <input type="checkbox" value="100005">
+      <span class="infraLabel">Termo de Encerramento de Processo Eletrônico 100005 - 30/09/2026</span>
+    </li>
+    <li>
+      <input type="checkbox" value="100006">
+      <span class="infraLabel">Ofício 100006 - 02/10/2026</span>
+    </li>
+  </ul>
+</div>
+"""
+
+
+class ProcessoEncerradoTest(unittest.TestCase):
+    """Termo de Encerramento como último documento fecha o processo.
+
+    Nesse caso não há andamento a classificar: o script não deve gastar
+    download/CAPTCHA nem reportar a situação do despacho antigo como se
+    fosse a atual. A situação avisa o usuário para confirmar no SEI.
+    """
+
+    NOW = "2026-10-02 10:00:00"
+
+    def setUp(self):
+        self.rules = rules_deterministicas()
+        self.p = pr("21260.003436/2026-15")
+
+    def _client(self, tmp, html):
+        return FakeClient(
+            html=html,
+            docs=docs_correlacionados(),
+            pdf_path=temp_pdf(tmp, "d.pdf", PDF_WITH_TEXT_B64),
+            despacho_link=True,
+        )
+
+    def test_termo_no_fim_nao_baixa_e_marca_encerrado(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, TREE_ENCERRADA)
+            r = analyze_process(client, self.p, None, False, self.NOW, self.rules)
+        self.assertEqual(client.download_calls, 0)
+        self.assertEqual(r.situacao, "Encerrado (verificar manualmente)")
+        self.assertEqual(r.data_ultimo_despacho, "01/10/2026")
+        self.assertEqual(r.destino, "")
+        self.assertEqual(r.status_coleta, "concluído")
+        self.assertEqual(r.hash_ultimo_despacho,
+                         despacho_hash("encerrado|100005|01/10/2026"))
+
+    def test_termo_encerrado_reaproveita_cache(self):
+        prev = row(self.p.number, "Encerrado (verificar manualmente)",
+                   despacho_hash("encerrado|100005|01/10/2026"))
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, TREE_ENCERRADA)
+            r = analyze_process(client, self.p, prev, False, self.NOW, self.rules)
+        self.assertEqual(client.download_calls, 0)
+        self.assertEqual(r.status_coleta, "concluído (cache)")
+        self.assertEqual(r.situacao, prev.situacao)
+
+    def test_termo_no_meio_do_processo_analisa_normalmente(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, TREE_ENCERRADA_COM_OFICIO_DEPOIS)
+            r = analyze_process(client, self.p, None, False, self.NOW, self.rules)
+        self.assertEqual(client.download_calls, 1)
+        self.assertEqual(r.situacao, "SCIENTIA CIENCIA")
+
+
 class DateWindowTest(unittest.TestCase):
     def test_deriva_inicio_de_hoje_menos_dias(self):
         args = parse_arguments(["--dias", "7"])

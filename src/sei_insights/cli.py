@@ -19,7 +19,9 @@ from sei_insights.storage.mirror import MirrorStore, ProcessRow, despacho_hash
 from sei_insights.clients.rate_limit import RateLimiter
 from sei_insights.config.rules import RulesEngine
 from sei_insights.documents.text_ing import extract_text_from_pdf
-from sei_insights.documents.tree import despachos_ordenados, parse_tree
+from sei_insights.documents.tree import (
+    despachos_ordenados, parse_tree, processo_encerrado,
+)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)-8s | %(message)s",
@@ -242,6 +244,45 @@ def analyze_process(
     """
     html = client.open_process(p)
     nodes = parse_tree(html)
+
+    # Um "Termo de Encerramento de Processo Eletrônico" como ÚLTIMO documento
+    # fecha o processo. Não há andamento posterior a classificar, então baixar
+    # despacho gastaria CAPTCHA para reportar a situação de um processo que já
+    # acabou. A situação avisa o usuário para confirmar no SEI — o script não
+    # pode afirmar sozinho que o processo não andou mais.
+    encerrado = processo_encerrado(nodes)
+    if encerrado is not None:
+        novo_hash = despacho_hash(
+            f"encerrado|{encerrado.numero or 'restrito'}|{encerrado.data}"
+        )
+        if prev is not None and not force and prev.hash_ultimo_despacho == novo_hash:
+            # Mesmo encerramento já registrado: reaproveita a linha inteira.
+            return ProcessRow(
+                numero=p.number, data_execucao=now,
+                data_ultimo_despacho=prev.data_ultimo_despacho,
+                situacao=prev.situacao, destino=prev.destino,
+                acao_esperada=prev.acao_esperada,
+                pendencia_curta=prev.pendencia_curta,
+                link_process=p.url, status_coleta="concluído (cache)",
+                hash_ultimo_despacho=novo_hash,
+            )
+        logger.info(
+            "Processo %s: último documento é o Termo de Encerramento de "
+            "Processo Eletrônico (%s, %s). Processo encerrado; não baixei "
+            "despacho.",
+            p.number, encerrado.numero or "(sem número)",
+            encerrado.data or "(sem data)",
+        )
+        return ProcessRow(
+            numero=p.number, data_execucao=now,
+            data_ultimo_despacho=encerrado.data,
+            situacao="Encerrado (verificar manualmente)", destino="",
+            acao_esperada="",
+            pendencia_curta="Confirmar o encerramento do processo no SEI",
+            link_process=p.url, status_coleta="concluído",
+            hash_ultimo_despacho=novo_hash,
+        )
+
     candidatos = despachos_ordenados(nodes)
 
     if not candidatos:
