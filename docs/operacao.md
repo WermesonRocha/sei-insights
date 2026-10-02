@@ -26,7 +26,7 @@ erro.
 | ------ | ---------- |
 | `numero` | Número **canônico** do processo (`NNNNN.NNNNNN/AAAA-NN`), lido do cabeçalho da página pública. É a chave primária no espelho SQLite. |
 | `data_ultimo_despacho` | Data do último Despacho, da coluna **"Data de Inclusão"**. Vazia quando não há despacho público ou a data não foi exibida. |
-| `situacao` | Situação classificada pelo motor de regras. Valores especiais: `Sem despacho público`, `Texto não extraível (digitalizado?)`, `Encerrado (verificar manualmente)`, fallback `Em análise` e `Erro / retry`. |
+| `situacao` | Situação classificada pelo motor de regras. Valores especiais: `Sem despacho público`, `Texto não extraível (digitalizado?)`, `Encerrado (verificar manualmente)`, fallback `Verificar manualmente`, `Em <destino>` (cabeçalho de sigla) e `Erro / retry`. |
 | `destino` | Destinatário citado no cabeçalho (`Destino:` ou `À/Ao/Aos/Às <nome>`), mantido por extenso ou reduzido a sigla. Vários destinatários na mesma célula, separados por `"; "`. Vazio quando não envolve destinatário. |
 | `acao_esperada` | Ação pedida pelo despacho (análise, assinatura, retorno, providências, ciência...). Vazia quando não se aplica. |
 | `pendencia_curta` | Uma linha resumindo **quem está com o processo** e **o que falta**. Vazia quando não há pendência. |

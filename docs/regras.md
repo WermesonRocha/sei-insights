@@ -29,7 +29,10 @@ planilha.** Não há IA, modelo de linguagem nem consulta a sistema externo.
    placeholder `{destino}`.
 5. O `destino` do **cabeçalho** **sobrepõe** o da regra quando existe; mesmo sem
    regra casando, o destinatário preenche `destino` no fallback.
-6. Se **nenhuma** regra casar, vale o fallback (padrão: `"Em análise"`).
+6. Se **nenhuma** regra casar: com um cabeçalho de **sigla limpa** (só
+   maiúsculas, curto) a situação vira `Em <destino>` — a regra 24 apenas
+   *fraseia* o cabeçalho; caso contrário, vale o fallback configurado (hoje
+   `"Verificar manualmente"`).
 
 Cada regra tem a forma:
 
@@ -98,12 +101,13 @@ Cada valor vem de uma destas fontes, todas **literais**:
 | 3 | **Texto fixo da regra** | frase escrita à mão em `regras.json`, com `{destino}` expandindo para o destinatário resolvido |
 
 Não havendo nenhuma dessas fontes, a célula fica **vazia** — "o despacho não diz
-isso", nunca uma hipótese. O único preenchimento automático é o fallback
-`situacao = "Em análise"`.
+isso", nunca uma hipótese. O único preenchimento automático é o da `situacao`:
+`"Verificar manualmente"` (fallback) ou `Em <destino>` quando o cabeçalho traz
+uma sigla limpa.
 
 | Campo | Fonte | Quando fica vazio |
 | ----- | ----- | ----------------- |
-| `situacao` | texto fixo (3) e/ou `\1`/`\2` (2) | nunca: sem regra casando entra `Em análise` |
+| `situacao` | texto fixo (3) e/ou `\1`/`\2` (2) | nunca: sem regra casando entra o fallback (`Verificar manualmente`) ou `Em <destino>` (cabeçalho de sigla) |
 | `destino` | cabeçalho (1); sem ele, `\1`/`\2` do corpo (2) | despacho sem destinatário **e** sem regra que capture um |
 | `acao_esperada` | texto fixo (3) e/ou `\1`/`\2` (2) | a regra descreve a situação mas não a ação |
 | `pendencia_curta` | texto fixo (3) e/ou `\1`/`\2` (2) | idem |
@@ -123,18 +127,18 @@ Os textos abaixo são os mesmos de `tests/test_rules.py`, portanto reproduzívei
 | --------- | ---------- | --------------- | ----------------- |
 | `CGATI` | `Encaminhado a conhecimento e deliberação` | `conhecimento e deliberação` | `Aguardando conhecimento e deliberação do destinatário` |
 
-**2. `14021.072944/2026-92` — nenhuma regra casou (fallback)**
+**2. `14021.072944/2026-92` — cabeçalho de sigla fraseia o destino**
 
 > `À Secretaria-Executiva` / `Assunto: ...`
 > ... *"Encaminho o presente processo para análise e providências."*
 
 | `destino` | `situacao` | `acao_esperada` | `pendencia_curta` |
 | --------- | ---------- | --------------- | ----------------- |
-| `SE` | `Em análise` | *(vazia)* | *(vazia)* |
+| `SE` | `Em SE` | `análise` | `Processo com SE para análise/próximo passo` |
 
-Caso honesto: o texto não casou com nenhum padrão, então `Em análise` e as colunas
-de ação ficam vazias. `Em análise` **não** vira `Em SE`: o fallback marca
-"precisa de leitura humana", e o destinatário já está em `destino` ao lado.
+Nenhum padrão do corpo casou, mas o cabeçalho traz a sigla limpa `SE`: a regra 24,
+que apenas **fraseia** o destino, produz `Em SE`. Sem essa sigla limpa, cairia no
+fallback `Verificar manualmente`.
 
 **3. `21260.000680/2025-37` — destino pelo campo `Destino:`**
 
@@ -144,10 +148,11 @@ de ação ficam vazias. `Em análise` **não** vira `Em SE`: o fallback marca
 
 | `destino` | `situacao` | `acao_esperada` | `pendencia_curta` |
 | --------- | ---------- | --------------- | ----------------- |
-| `ASCOM` | `Em análise` | *(vazia)* | *(vazia)* |
+| `ASCOM` | `Em ASCOM` | `análise` | `Processo com ASCOM para análise/próximo passo` |
 
 Sem linha `À/Ao/Aos/Às`, o destinatário está no campo `Destino:`. `ASCOM` não foi
-adivinhado: o próprio despacho escreve o nome por extenso seguido da sigla.
+adivinhado: o próprio despacho escreve o nome por extenso seguido da sigla. Como
+nenhuma regra casou e `ASCOM` é sigla limpa, a regra 24 fraseia `Em ASCOM`.
 
 **4. `21260.001106/2026-87` — encerramento acima do cargo da signatária**
 
@@ -204,7 +209,7 @@ temáticos sem destino:
 | 21 | "cumpra-se/para cumprimento/determino cumprimento" | `Para cumprimento` |
 | 22 | "sugere-se ... seja retomada/retomado ... planejamento" | `Aguardando retomada (avaliação futura)` |
 | 23 | "termo de encerramento", "cumpriu seu objetivo", "procedo ao seu encerramento" | `Encerrado` |
-| 24 | menção a unidade interna (`SGA`, `CCL`, `CTI`, `SCL`, `SG`, `COORDENAÇÃO`, `DIRETORIA`, `SECRETARIA`, `GERÊNCIA`, `NÚCLEO`, `DEPARTAMENTO`...) | `Em {destino}` |
+| 24 | menção a unidade interna (`SGA`, `CCL`, `CTI`, `SCL`, `SG`, `COORDENAÇÃO`, `DIRETORIA`, `SECRETARIA`, `GERÊNCIA`, `NÚCLEO`, `DEPARTAMENTO`...); se nenhuma outra regra casou, *fraseia* o cabeçalho de sigla | `Em {destino}` |
 | 25 | órgão externo (`Ministério Público`, `Tribunal de Contas`, `Controladoria`, `Polícia Federal`, `Receita Federal`, `INSS`, `AGU`, `PGFN`, `MPF`, `TCU`, `CGU`...) | `Encaminhado a órgão externo (<órgão>)` |
 
 Duas regras existem por ordem, não por assunto:
@@ -225,11 +230,19 @@ Duas regras existem por ordem, não por assunto:
   escapes no JSON: uma backreference é escrita `\\1` (dois caracteres), que o
   `json.load` converte para `\1`.
 
-## O fallback "Em análise"
+## O fallback e o "Em {destino}"
 
-Se nenhuma regra casar, a situação padrão é **"Em análise"**. O `destino` ainda é
-preenchido quando o cabeçalho cita o destinatário. O fallback **não** vira
-`Em <destino>`: é o marcador de "nenhuma regra casou, precisa de leitura humana".
+Se nenhuma regra casar, há dois desfechos:
+
+- cabeçalho com **sigla limpa** (só maiúsculas, curto) — a regra 24 apenas
+  **fraseia** o destinatário do cabeçalho e a situação vira `Em <destino>`
+  (ex.: `Em SE`, `Em CGATI`);
+- caso contrário — vale o fallback do `regras.json` ("Verificar manualmente"), o
+  marcador de "nenhuma regra casou, precisa de leitura humana".
+
+Nos dois casos o `destino` é preenchido pelo cabeçalho. O fallback **não** vira
+`Em <frase>` quando o cabeçalho é ruidoso (nome por extenso com minúsculas):
+aí fica `Verificar manualmente`.
 
 ## Quando não há texto para interpretar
 
@@ -243,7 +256,8 @@ aplica"):
 | `Texto não extraível (digitalizado?)` | o PDF foi baixado, mas o `pypdf` não extraiu texto | todos vazios |
 | `Erro / retry` | a coleta do processo falhou; o motivo está em `status_coleta` | todos vazios |
 | `Encerrado (verificar manualmente)` | Termo de Encerramento é o último documento | só a pendência de conferência |
-| `Em análise` | texto lido, nenhuma regra casou | só `destino`, se o cabeçalho citar destinatário |
+| `Verificar manualmente` | texto lido, nenhuma regra casou e o cabeçalho não é sigla limpa | só `destino`, se o cabeçalho citar destinatário |
+| `Em <destino>` | texto lido, nenhuma regra casou e o cabeçalho traz uma sigla limpa | `destino` = a sigla do cabeçalho |
 | (`status_coleta = concluído (cache)`) | o último Despacho não mudou: campos **copiados** da análise anterior | preservados |
 
 ## Como auditar uma linha

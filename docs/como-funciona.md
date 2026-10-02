@@ -132,8 +132,10 @@ navegador, com pausas, retry e verificação de SHA-256. O texto é extraído co
 
 O texto é normalizado e testado contra a lista ordenada de regras de
 `regras.json`. A primeira que casar vence e produz `situacao`, `destino`,
-`acao_esperada` e `pendencia_curta`. Nenhuma casando, vale o fallback. Os
-detalhes estão em [Regras e classificação](regras.md).
+`acao_esperada` e `pendencia_curta`. Nenhuma casando: com um cabeçalho de sigla
+limpa a situação vira `Em <destino>`; caso contrário, vale o fallback
+(`Verificar manualmente`). Os detalhes estão em
+[Regras e classificação](regras.md).
 
 ## 9. Persistência
 

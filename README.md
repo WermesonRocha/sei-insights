@@ -130,9 +130,10 @@ o navegador; não precisa teclar ENTER). No Linux, verifique `libgomp1`.
 da série "Despacho" (ou não há documentos públicos). Não é erro de execução: é a
 classificação correta.
 
-**Tudo aparece como "Em análise" (fallback)** — nenhuma regra casou. Revise o
-`regras.json` (veja [Regras e classificação](docs/regras.md)) e adicione um padrão
-para o caso real observado.
+**Muitos processos aparecem como "Verificar manualmente" (fallback)** — nenhuma
+regra casou e o cabeçalho não traz uma sigla limpa. Revise o `regras.json` (veja
+[Regras e classificação](docs/regras.md)) e adicione um padrão para o caso real
+observado.
 
 **O processo ficou com `status_coleta = erro: ...`** — uma falha não interrompe os
 demais. Corrija a causa indicada e rode `--force`.
