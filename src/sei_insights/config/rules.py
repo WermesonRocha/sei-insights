@@ -61,6 +61,13 @@ _LETTERHEAD_LINE = re.compile(
     r"SUPERINTEND[ÊE]NCIA|FUNDA[ÇC][ÃA]O)\b",
     re.IGNORECASE,
 )
+# Menção à própria unidade no corpo ("nesta/desta/dessa Assessoria Especial de
+# Controle Interno") resolve a unidade do timbrado quando não há cabeçalho.
+_PROPRIA_UNIDADE = re.compile(
+    r"\b(?:nest[ae]|ness[ae]|dest[ae]|dess[ae])\s+"
+    r"([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-]{2,80}?)"
+    r"(?=[,.;:)\n]|\s+(?:para|a fim|com|que)\b|$)"
+)
 
 
 def _paragraphs(text: str) -> list[str]:
@@ -88,6 +95,13 @@ def _is_letterhead(para: str) -> bool:
 
 
 def _trim_trailing_labels(resto: str) -> str:
+    # Vocativo de corpo ("Senhores Fiscais ...") pode vir na mesma linha do
+    # destinatário (regressão 12804.002713/2025-06) e não é destino: corta a
+    # partir dele em vez de deixá-lo grudado na unidade.
+    resto = re.split(
+        r",?\s+(?=(?:senhor(?:es|a|as)?|prezad[oa]s?|caros?|ilmo|ilma)\b)",
+        resto, maxsplit=1, flags=re.IGNORECASE,
+    )[0]
     return re.sub(r"\s+", " ", resto).strip(" \t.,;:")
 
 
@@ -107,7 +121,7 @@ def _recipient_from_paragraph(para: str) -> str:
     return DESTINATARIOS_SEP.join(p for p in partes if p)
 
 
-def _split_body(text: str) -> tuple[str, str]:
+def _split_body(text: str, conhece_unidade=None) -> tuple[str, str]:
     paras = _paragraphs(text)
     # O bloco de assinatura vem sempre no fim e é cortado ANTES de procurar o
     # destinatário. O destinatário era procurado primeiro, e a linha do
@@ -143,8 +157,29 @@ def _split_body(text: str) -> tuple[str, str]:
     if recip_idx is None:
         while start < len(paras) and _is_letterhead(paras[start]):
             start += 1
+        # Metadados do cabeçalho (DESPACHO, Processo, Brasília, ...) também não
+        # são corpo; pulá-los permite ler a linha de unidade que os sucede.
+        while start < len(paras) and _META_PARAGRAPH.match(paras[start]):
+            start += 1
+        if (
+            conhece_unidade is not None
+            and start < len(paras)
+            and conhece_unidade(paras[start])
+        ):
+            recipient = paras[start]
+            start += 1
     body = [p for p in paras[start:] if not _META_PARAGRAPH.match(p)]
     return recipient, " ".join(re.sub(r"\s+", " ", p) for p in body)
+
+
+def _parece_sigla(destino: str) -> bool:
+    """Destino curto escrito só com maiúsculas (sigla), não nome por extenso.
+
+    Só um cabeçalho assim fraseia a situação quando nenhuma regra casa: nome
+    por extenso pode ser ruidoso (linha de timbrado, frase inteira) e não deve
+    virar `Em <frase>`.
+    """
+    return 0 < len(destino) <= 80 and destino == destino.upper()
 
 
 def _expand_destino(valor: str, destino: str) -> str:
@@ -159,6 +194,48 @@ def _expand_destino(valor: str, destino: str) -> str:
     return valor.replace(
         _DESTINO_PLACEHOLDER, destino or DESTINO_DESCONHECIDO
     )
+
+
+# Substantivo de unidade sem qualificador não identifica QUEM recebeu
+# ("Em Secretaria": qual secretaria?). Vocativo de corpo ("Aos Senhores
+# Fiscais ...") e rótulo de documento ("Portaria nº ...") também não são
+# destino. O que não identifica sai; nada é inferido.
+_DESTINO_VAGO = {
+    "secretaria", "subsecretaria", "coordenacao", "coordenacao geral",
+    "coordenacao-geral", "diretoria", "superintendencia", "gerencia",
+    "assessoria", "nucleo", "divisao", "departamento", "gabinete",
+    "setor", "secao", "servico", "unidade", "area", "orgao",
+}
+_DESTINO_CONECTORES = {"e", "ou", "e ou"}
+_DESTINO_VOCATIVO = re.compile(
+    r"^(?:senhor(?:es|a|as)?|prezad[oa]s?|ilmo|ilma|caros?)\b", re.IGNORECASE
+)
+_DESTINO_DOCUMENTO = re.compile(
+    r"^(?:portaria|of[ií]cio|processo|despacho|memorando|nota|requerimento|"
+    r"documento|contrato|edital)\b",
+    re.IGNORECASE,
+)
+
+
+def _destino_concreto(destino: str) -> str:
+    """Mantém só as partes do destino que identificam uma unidade concreta.
+
+    Descarta substantivo solto ("Secretaria"), vocativo ("Senhores ..."),
+    rótulo de documento ("Portaria nº ...") e conectivo de lista ("e"). Se
+    nada sobrar, o chamador cai no fallback; nada é inferido.
+    """
+    if not destino:
+        return ""
+    partes = []
+    for parte in destino.split(DESTINATARIOS_SEP):
+        p = parte.strip()
+        folded = _fold(p)
+        if not p or folded in _DESTINO_VAGO or folded in _DESTINO_CONECTORES:
+            continue
+        if _DESTINO_VOCATIVO.match(p) or _DESTINO_DOCUMENTO.match(p):
+            continue
+        partes.append(p)
+    return DESTINATARIOS_SEP.join(partes)
 
 
 class RulesEngine:
@@ -207,6 +284,13 @@ class RulesEngine:
             sigla = self._sigla_por_nome_inteiro(base)
             if sigla:
                 return sigla
+            # Código de unidade seguido do nome por extenso
+            # ("MMULHERES-SE-SGA-CGTI - COORDENAÇÃO-GERAL DE TECNOLOGIA DA
+            # INFORMAÇÃO"): reduz o código pela sigla final, como já se faz
+            # quando o código vem sozinho.
+            m = re.search(r"[–-]\s*([A-ZÀ-Ÿ]{2,})\s*$", base)
+            if m:
+                return m.group(1)
         m = re.search(r"\(\s*([A-ZÀ-Ÿ]{2,})\s*\)", recip)
         if m:
             return m.group(1)
@@ -228,12 +312,64 @@ class RulesEngine:
         partes = (self.normalize_recipient(p) for p in recipient.split(DESTINATARIOS_SEP))
         return DESTINATARIOS_SEP.join(p for p in partes if p)
 
+    def _conhece_unidade_linha(self, para: str) -> bool:
+        """Linha isolada de unidade logo após o cabeçalho (ex.: a
+        `Subsecretaria de Gestão e Administração` que o SEI repete antes do
+        corpo). Só vale se o nome inteiro casa com o mapa `siglas` ou se traz
+        a sigla explícita — nunca um parágrafo de corpo."""
+        p = para.strip()
+        if not p or "\n" in p or len(p) > 120 or p.endswith("."):
+            return False
+        if self._sigla_por_nome_inteiro(p):
+            return True
+        return bool(
+            _LETTERHEAD_LINE.match(p)
+            and re.search(r"(?:[–-]\s*|\(\s*)[A-ZÀ-Ÿ]{2,}\s*\)?\s*$", p)
+        )
+
+    def _unidade_propria(self, body: str) -> str:
+        """Unidade do próprio timbrado citada no corpo ("nesta/dessa ..."),
+        resolvida pelo mapa `siglas`. Sem correspondência, não é destino."""
+        m = _PROPRIA_UNIDADE.search(body)
+        if not m:
+            return ""
+        nome = re.sub(r"\s+", " ", m.group(1)).strip()
+        if self._sigla_por_nome_inteiro(nome):
+            return nome
+        # O trecho pode continuar além do nome da unidade (ex.: "... e a
+        # Coordenação X"); aceita a chave do mapa que o inicia.
+        low = _fold(nome)
+        melhor, melhor_len = "", 0
+        for chave in self.siglas:
+            fc = _fold(chave)
+            if fc and low.startswith(fc) and len(fc) > melhor_len:
+                melhor, melhor_len = chave, len(fc)
+        return melhor
+
     def classify(self, text: str) -> RuleResult:
-        recipient, body = _split_body(text)
+        recipient, body = _split_body(text, self._conhece_unidade_linha)
+        if not recipient:
+            recipient = self._unidade_propria(body)
         destino_cabecalho = self.normalize_recipients(recipient)
+        header_concreto = _destino_concreto(destino_cabecalho)
         normalized = re.sub(r"\s+", " ", body).strip()
         result = RuleResult(**self.fallback)
+        matched = False
+        terminal = False
+        fraseia_cabecalho: Optional[dict] = None
         for rule in self.rules:
+            if rule.get("requer_sem_cabecalho") and header_concreto:
+                # Citação a órgão externo em código de documento/URL só vale
+                # quando não há cabeçalho interno que mande: o cabeçalho
+                # endereça a unidade e não pode ser contradito por uma menção
+                # de passagem (diretriz: cabeçalho interno vence).
+                continue
+            if rule.get("fraseia_cabecalho") and _parece_sigla(destino_cabecalho):
+                # Com cabeçalho de sigla limpa o destino já veio dele e a regra
+                # só fraseia a situação ("Em {destino}"). Não decide na hora:
+                # guarda para o fim, deixando uma menção real a órgão externo
+                # (regra posterior) ter precedência.
+                fraseia_cabecalho = rule
             restrito = rule.get("pattern_sem_cabecalho")
             if restrito and not destino_cabecalho:
                 # Sem cabeçalho, a regra genérica de unidade fica mais estrita:
@@ -255,18 +391,43 @@ class RulesEngine:
             if m:
                 def sub(val: str) -> str:
                     try:
-                        return m.expand(val)
+                        expandido = m.expand(val)
                     except (re.error, IndexError):
                         return ""
+                    if rule.get("upper_captura") and m.lastindex:
+                        # Sigla de órgão externo citada em minúsculas
+                        # (domínio 'supersapiens.agu.gov.br') volta canônica:
+                        # 'agu' -> 'AGU'. Frases com espaço não são tocadas.
+                        capturado = m.group(1) or ""
+                        if capturado and " " not in capturado:
+                            expandido = expandido.replace(capturado, capturado.upper())
+                    return expandido
                 result = RuleResult(
                     situacao=sub(rule.get("situacao", self.fallback["situacao"])),
                     destino=sub(rule.get("destino", "")),
                     acao_esperada=sub(rule.get("acao_esperada", "")),
                     pendencia_curta=sub(rule.get("pendencia_curta", "")),
                 )
+                matched = True
+                terminal = bool(rule.get("terminal"))
                 break
-        if destino_cabecalho:
+        if not matched and fraseia_cabecalho is not None:
+            result = RuleResult(
+                situacao=fraseia_cabecalho.get("situacao", self.fallback["situacao"]),
+                destino=fraseia_cabecalho.get("destino", ""),
+                acao_esperada=fraseia_cabecalho.get("acao_esperada", ""),
+                pendencia_curta=fraseia_cabecalho.get("pendencia_curta", ""),
+            )
+        if destino_cabecalho and not terminal:
+            # Arquivamento/encerramento é situação terminal: dispensa destino
+            # (direto), então o cabeçalho não o preenche.
             result.destino = destino_cabecalho
+        concreto = _destino_concreto(result.destino)
+        if result.destino and not concreto:
+            # O destino só tinha termo vago/vocativo/rótulo de documento: não
+            # há unidade a afirmar. Volta ao fallback ("Verificar manualmente").
+            result = RuleResult(**self.fallback)
+        result.destino = concreto
         # `{destino}` expande com o destinatário EFETIVO (cabeçalho tem
         # precedência sobre o capturado pela regra) para a situação dizer DE
         # QUEM é o trabalho.

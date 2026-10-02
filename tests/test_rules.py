@@ -114,7 +114,7 @@ class RulesTest(unittest.TestCase):
 
     def test_destino_sigla_via_mapa_de_unidades(self):
         """'Coordenação de Tecnologia da Informação' vira CTI pelo mapa em
-        regras.json; sem ação conhecida cai no fallback (não 'Em Secretaria')."""
+        regras.json; a situação fraseia o destino (não 'Em Secretaria')."""
         engine = RulesEngine.from_file(Path("regras.json"))
         r = engine.classify(
             "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n\n"
@@ -123,7 +123,7 @@ class RulesTest(unittest.TestCase):
             "Aguardando manifestação do setor responsável."
         )
         self.assertEqual(r.destino, "CTI")
-        self.assertEqual(r.situacao, "Em análise")
+        self.assertEqual(r.situacao, "Em CTI")
 
     def test_ao_gabinete_da_ministra_003709(self):
         """'Ao Gabinete da Ministra' é lido como destinatário exato no cabeçalho
@@ -306,15 +306,17 @@ class RegraGenericaInternaTest(unittest.TestCase):
             r.pendencia_curta, "Processo com CGATI para análise/próximo passo"
         )
 
-    def test_regra_interna_sem_cabecalho_mantem_o_substantivo(self):
-        """Sem cabeçalho não há destino para citar: a situação repete o
-        substantivo encontrado (honesto) em vez de prometer um identificador."""
+    def test_regra_interna_sem_cabecalho_nao_inventa_destino(self):
+        """Sem cabeçalho, substantivo solto no corpo não identifica unidade:
+        nada de 'Em Coordenação'; a situação manda verificar manualmente."""
         cfg = json.loads(Path("regras.json").read_text(encoding="utf-8"))
         internas = [r for r in cfg["regras"] if r["situacao"] == "Em {destino}"]
-        engine = RulesEngine({"regras": internas, "siglas": cfg["siglas"]})
+        engine = RulesEngine(
+            {"regras": internas, "siglas": cfg["siglas"], "fallback": cfg["fallback"]}
+        )
         r = engine.classify("Retorno a esta Coordenação para análise.")
-        self.assertEqual(r.destino, "Coordenação")
-        self.assertEqual(r.situacao, "Em Coordenação")
+        self.assertEqual(r.destino, "")
+        self.assertEqual(r.situacao, "Verificar manualmente")
 
     def test_mencao_a_nome_completo_de_unidade_nao_vira_destino(self):
         """Regressão 12804.000290/2026-62: menção a nome completo não é destino.
@@ -431,6 +433,164 @@ class RegraGenericaInternaTest(unittest.TestCase):
         )
         self.assertEqual(r.destino, "Gabinete da Ministra")
         self.assertNotIn("Assessoria", r.situacao)
+
+    def test_cabecalho_de_sigla_sem_regra_fraseia_o_destino(self):
+        """Regressão (Em CGTI 4->1): com cabeçalho de sigla limpa e nenhuma
+        regra casando, a situação volta a dizer 'Em {destino}' em vez de
+        'Em análise'. O destino veio do cabeçalho; a regra só fraseia."""
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n\n"
+            "DESPACHO Nº 444/2026/SGA/SE-MMULHERES\n\n"
+            "Processo nº 21260.000576/2026-23\n\n"
+            "À Coordenação-Geral de Tecnologia da Informação - CGTI\n\n"
+            "1 . Trata-se do expediente administrativo."
+        )
+        self.assertEqual(r.destino, "CGTI")
+        self.assertEqual(r.situacao, "Em CGTI")
+
+    def test_cabecalho_ruidoso_nao_vira_em_destino(self):
+        """Só cabeçalho de sigla limpa fraseia; nome por extenso (com
+        minúsculas) não vira 'Em <frase>' — cai no fallback 'Verificar
+        manualmente'."""
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n\n"
+            "DESPACHO\n\n"
+            "À Consultoria Jurídica\n\n"
+            "1 . Trata-se do expediente administrativo."
+        )
+        self.assertEqual(r.destino, "Consultoria Jurídica")
+        self.assertEqual(r.situacao, "Verificar manualmente")
+
+    def test_codigo_de_documento_nao_vira_orgao_externo(self):
+        """Regressão (21260.000050/2026-43): com cabeçalho interno que manda
+        (CGTI), a citação a 'CGU' no código do documento não muda a situação —
+        o cabeçalho interno vence."""
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n\n"
+            "DESPACHO\n\n"
+            "À Coordenação-Geral de Tecnologia da Informação - CGTI\n\n"
+            "1 . Encaminho o Despacho Nº 00004/2026/PROT/CONJUR-MM/CGU/AGU "
+            "(SEI nº 56811922 e SEI nº 56811814)."
+        )
+        self.assertEqual(r.destino, "CGTI")
+        self.assertEqual(r.situacao, "Em CGTI")
+
+    def test_codigo_de_documento_sem_cabecalho_vira_orgao_externo(self):
+        """Sem cabeçalho interno que mande, a citação a CGU/AGU em código de
+        documento vira destino externo (diretriz: órgão externo aparece quando
+        citado)."""
+        r = self.engine.classify(
+            "DESPACHO\n\n"
+            "Encaminho a Nota Jurídica Nº. 00012/2025/CNDE/CGU/AGU (SEI nº 1)."
+        )
+        self.assertEqual(r.destino, "CGU")
+        self.assertEqual(r.situacao, "Em órgão externo (CGU)")
+
+    def test_mencao_real_a_orgao_externo_ainda_vence_o_cabecalho(self):
+        """O fraseio pelo cabeçalho não rouba o posto de uma menção real a
+        órgão externo (a regra de órgão externo vence o fallback de cabeçalho)."""
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\n\nDESPACHO\n\n"
+            "À Coordenação-Geral de Tecnologia da Informação - CGTI\n\n"
+            "Encaminho os autos ao TCU para providências."
+        )
+        self.assertEqual(r.situacao, "Em órgão externo (TCU)")
+
+    def test_dominio_agu_vira_orgao_externo(self):
+        """Sem cabeçalho interno, 'agu' citado em domínio
+        (supersapiens.agu.gov.br) é capturado como órgão externo."""
+        r = self.engine.classify(
+            "DESPACHO\n\n"
+            "Consulta ao processo eletrônico disponível em "
+            "https://supersapiens.agu.gov.br mediante NUP."
+        )
+        self.assertEqual(r.destino, "AGU")
+        self.assertEqual(r.situacao, "Em órgão externo (AGU)")
+        self.assertNotIn("supersapiens", r.destino)
+
+    def test_mencao_a_orgao_externo_no_fim_da_frase_ainda_e_lida(self):
+        """O ponto final não pode impedir a leitura de uma menção real."""
+        r = self.engine.classify("DESPACHO\n\nEncaminho os autos à CGU.")
+        self.assertEqual(r.situacao, "Em órgão externo (CGU)")
+
+    def test_substantivo_solto_no_corpo_nao_vira_destino(self):
+        """Substantivo solto não identifica unidade: nada de 'Em Assessoria';
+        a situação manda verificar manualmente."""
+        r = self.engine.classify("DESPACHO\n\nRetorno a esta Assessoria para análise.")
+        self.assertEqual(r.destino, "")
+        self.assertEqual(r.situacao, "Verificar manualmente")
+
+    def test_cabecalho_de_substantivo_solto_nao_vira_destino(self):
+        """'À Secretaria' não diz QUAL secretaria: não vira 'Em Secretaria'."""
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n\n"
+            "DESPACHO\n\nÀ Secretaria\n\n1 . Trata-se do expediente."
+        )
+        self.assertEqual(r.destino, "")
+        self.assertEqual(r.situacao, "Verificar manualmente")
+
+    def test_vocativo_nao_vira_destino(self):
+        """'Aos Senhores Fiscais ...' é vocativo do corpo, não destino."""
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\n\nDESPACHO\n\n"
+            "Aos Senhores Fiscais Requisitantes do Contrato Administrativo nº "
+            "69/2023\n\nInformamos o andamento do processo."
+        )
+        self.assertEqual(r.destino, "")
+        self.assertEqual(r.situacao, "Verificar manualmente")
+
+    def test_orgao_externo_generico_sem_nome(self):
+        """Sem órgão identificável, informa só que está em órgão externo."""
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\n\nDESPACHO\n\n"
+            "Encaminho os autos a outro órgão externo para providências."
+        )
+        self.assertEqual(r.situacao, "Em órgão externo")
+        self.assertEqual(r.destino, "")
+
+    def test_portaria_no_corpo_nao_vira_destino(self):
+        """Ruído 12804.000002/2024-16: 'Encaminha-se a Portaria n.º ...' não
+        pode frasear 'Encaminhado a Portaria n'; vale o cabeçalho (CCATI)."""
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\n\nDESPACHO\n\n"
+            "À Coordenação de Conformidade e Análise em Contratos de "
+            "Tecnologia da Informação - MGI-DTI-CCATI\n\n"
+            "Encaminha-se a Portaria n.º 6.593, de 27 de agosto de 2025, "
+            "publicada em 28 de agosto de 2025, que designou equipe de "
+            "fiscalização."
+        )
+        self.assertEqual(r.destino, "CCATI")
+        self.assertEqual(r.situacao, "Em CCATI")
+
+    def test_vocativo_na_linha_do_destinatario_nao_gruda(self):
+        """Ruído 12804.002713/2025-06: cabeçalho 'AO <unidade>, Senhores
+        Fiscais ...' — o vocativo de corpo não entra no destino."""
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\n\nDESPACHO\n\n"
+            "AO MMULHERES-SE-SGA-CGTI - COORDENAÇÃO-GERAL DE TECNOLOGIA DA "
+            "INFORMAÇÃO,\n"
+            "Senhores Fiscais Requisitantes do Contrato Administrativo nº "
+            "69/2023\n\n"
+            "Trata-se do encaminhamento dos Relatórios Aprovação de Serviços."
+        )
+        self.assertEqual(r.destino, "CGTI")
+        self.assertNotIn("Senhores", r.situacao)
+        self.assertNotIn("Contrato", r.situacao)
+
+    def test_nome_da_signataria_nao_vaza_para_a_acao(self):
+        """Ruído 21260.002257/2026-52: a ação termina no ponto final; o nome
+        da signatária logo depois não pode entrar."""
+        r = self.engine.classify(
+            "MINISTÉRIO DAS MULHERES\n\nDESPACHO\n\n"
+            "À Ouvidoria\n\n"
+            "Encaminho o Despacho Numerado 52 (SEI nº 61695684), em resposta "
+            "ao pedido de acesso à informação, para conhecimento e "
+            "providências cabíveis. ALÍCIA RÖSLER NELSIS Chefe de Gabinete "
+            "da Secretaria-Executiva"
+        )
+        self.assertEqual(r.destino, "Ouvidoria")
+        self.assertNotIn("ALÍCIA", r.situacao)
+        self.assertNotIn("NELSIS", r.situacao)
 
 
 class CampoDestinoTest(unittest.TestCase):
@@ -925,4 +1085,85 @@ class HorarioDaAssinaturaNaoViraDestinoTest(unittest.TestCase):
             "MMULHERES-SE-SGA-CGAO-CPSG\n"
         )
         r = self.ENGINE.classify(texto)
+        self.assertEqual(r.destino, "")
+
+
+class UnidadeVagaTest(unittest.TestCase):
+    """Rótulos vagos ('Secretaria', 'Coordenação') são resolvidos para a
+    unidade concreta, ou a situação (Arquivado/Encerrado) dispensa destino."""
+
+    ENGINE = RulesEngine.from_file(Path("regras.json"))
+
+    def test_solicito_o_arquivamento_vira_arquivado_sem_destino(self):
+        texto = (
+            "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n"
+            "Subsecretaria de Gestão e Administração\n"
+            "Coordenação-Geral de Administração e Orçamento\n"
+            "Coordenação de Gestão de Pessoas\n\n"
+            "DESPACHO\n\nProcesso nº 10199.000867/2024-24\n\n"
+            "Em atenção ao que consta nos autos, e não havendo providências "
+            "a serem adotadas no âmbito dessa Coordenação (CGP), solicito o "
+            "arquivamento dos autos."
+        )
+        r = self.ENGINE.classify(texto)
+        self.assertEqual(r.situacao, "Arquivado")
+        self.assertEqual(r.destino, "")
+
+    def test_concluidas_as_etapas_vira_encerrado_sem_destino(self):
+        texto = (
+            "MINISTÉRIO DAS MULHERES\n"
+            "Assessoria Especial de Controle Interno\n\n"
+            "DESPACHO\n\nProcesso nº 10199.000138/2026-30\n\n"
+            "Concluídas todas as etapas nesta Assessoria Especial de Controle "
+            "Interno, encerram-se os autos."
+        )
+        r = self.ENGINE.classify(texto)
+        self.assertEqual(r.situacao, "Encerrado")
+        self.assertEqual(r.destino, "")
+
+    def test_linha_de_unidade_apos_despacho_vira_destino(self):
+        texto = (
+            "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n"
+            "Subsecretaria de Gestão e Administração\n"
+            "Coordenação-Geral de Tecnologia da Informação\n\n"
+            "DESPACHO\n\n"
+            "Subsecretaria de Gestão e Administração\n\n"
+            "1 . Em atenção ao Ofício 109/2026 DIME, encaminho o processo "
+            "que trata do ateste do Relatório."
+        )
+        r = self.ENGINE.classify(texto)
+        self.assertEqual(r.destino, "SGA")
+        self.assertEqual(r.situacao, "Em SGA")
+
+    def test_nome_completo_no_cabecalho_vira_sigla(self):
+        r = self.ENGINE.classify(
+            "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n\n"
+            "DESPACHO\n\n"
+            "À Subsecretaria de Gestão e Administração\n\n"
+            "1 . Trata-se do expediente administrativo."
+        )
+        self.assertEqual(r.destino, "SGA")
+        self.assertEqual(r.situacao, "Em SGA")
+
+    def test_propria_unidade_citada_no_corpo_vira_destino(self):
+        texto = (
+            "MINISTÉRIO DAS MULHERES\n"
+            "Assessoria Especial de Controle Interno\n\n"
+            "DESPACHO\n\n"
+            "Permanece a demanda no âmbito desta Assessoria Especial de "
+            "Controle Interno para análise."
+        )
+        r = self.ENGINE.classify(texto)
+        self.assertEqual(r.destino, "AECI")
+        self.assertEqual(r.situacao, "Em AECI")
+
+    def test_arquivamento_com_cabecalho_nao_preenche_destino(self):
+        """Arquivamento dispensa destino mesmo com cabeçalho interno."""
+        r = self.ENGINE.classify(
+            "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n\n"
+            "DESPACHO\n\n"
+            "À Coordenação-Geral de Tecnologia da Informação - CGTI\n\n"
+            "Não havendo providências, solicito o arquivamento dos autos."
+        )
+        self.assertEqual(r.situacao, "Arquivado")
         self.assertEqual(r.destino, "")
