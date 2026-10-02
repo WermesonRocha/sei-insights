@@ -272,8 +272,12 @@ def analyze_process(
     # A identidade do cache é a do Despacho MAIS RECENTE, não a do que acabar
     # sendo lido: assim "o processo não se moveu" dispensa download mesmo
     # quando o mais recente é restrito e a leitura sempre cai no anterior.
+    # `numero` vazio = restrito sem checkbox: a data continua sendo a
+    # identidade, com um rótulo no lugar do número que não existe. Para os
+    # Despachos com checkbox o formato fica idêntico ao de sempre, então o
+    # cache dos processos já coletados não é invalidado por esta mudança.
     mais_recente = candidatos[0]
-    identificador = f"{mais_recente.numero}|{mais_recente.data}"
+    identificador = f"{mais_recente.numero or 'restrito'}|{mais_recente.data}"
     novo_hash = despacho_hash(identificador)
 
     if prev is not None and not force and prev.hash_ultimo_despacho == novo_hash:
@@ -293,6 +297,12 @@ def analyze_process(
     lido = None
     result = None
     for despacho in candidatos:
+        # Um Despacho restrito aparece na árvore sem checkbox selecionável, e
+        # `numero` é justamente a chave que marca esse checkbox. Sem chave não
+        # há o que pedir ao SEI: a tentativa seria marcar um checkbox de valor
+        # vazio, gastando rede e CAPTCHA para não dar em nada.
+        if not despacho.selecionavel:
+            continue
         result = client.download_despacho(
             p.number, despacho.numero, despacho.serie,
         )
@@ -311,13 +321,24 @@ def analyze_process(
         )
 
     if lido is not mais_recente:
+        # O restrito sem checkbox não tem número para citar — o número é a
+        # chave do checkbox, e checkbox não há. Dizer apenas "não tem download
+        # público" esconderia a diferença entre "o SEI não oferece o PDF" e
+        # "o SEI nem chegou a oferecer a opção", que é justamente o que o
+        # usuário precisa saber para entender a data da planilha.
+        quem = (
+            f"{mais_recente.numero}, {mais_recente.data or '(sem data)'}"
+            if mais_recente.numero
+            else "restrito, sem checkbox para marcar, "
+                 f"{mais_recente.data or '(sem data)'}"
+        )
         logger.warning(
-            "Despacho mais recente (%s, %s) não tem download público. "
+            "Despacho mais recente (%s) não tem download público. "
             "Classifiquei o Despacho anterior (%s, %s), que é público — a "
             "data gravada é a do documento lido. Se este processo andou "
             "depois de %s, o andamento real está mais adiantado do que a "
             "planilha mostra.",
-            mais_recente.numero, mais_recente.data or "(sem data)",
+            quem,
             lido.numero, lido.data or "(sem data)",
             lido.data or "(sem data)",
         )

@@ -44,6 +44,29 @@ class DocNode:
     data: str
     posicao: int
     url: str = ""
+    # O SEI permite marcar este documento para gerar PDF? Um Despacho restrito
+    # aparece na tabela igual aos demais, mas sem checkbox selecionável, e aí
+    # não há download possível. `numero` é a chave que marca o checkbox, então
+    # um nó não selecionável não tem número — ver `parse_tree`.
+    selecionavel: bool = True
+
+
+def _checkbox_selecionavel(row) -> tuple[bool, str]:
+    """(o SEI deixa gerar PDF deste documento?, chave para marcar o checkbox).
+
+    A chave é o `value` do checkbox, que é o identificador que o SEI espera
+    em `hdnInfraItensSelecionados` — não é o número do documento. Sem checkbox
+    não há chave, e inventar uma (com o número do documento, por exemplo) faria
+    o download tentar marcar o documento errado.
+    """
+    box = row.select_one("input[type='checkbox'][value]")
+    if box is None:
+        return False, ""
+    valor = box.get("value") or ""
+    desabilitado = box.has_attr("disabled") or box.has_attr("readonly")
+    if desabilitado or not valor:
+        return False, ""
+    return True, valor
 
 
 def _inclusao_index(container) -> Optional[int]:
@@ -146,19 +169,25 @@ def parse_tree(html: str) -> list[DocNode]:
         if not data and date_m:
             data = date_m.group(1)
         num_m = NUM_RE.search(label)
+        selecionavel, chave = _checkbox_selecionavel(row)
         if num_m is None:
-            checkbox = row.select_one("input[type='checkbox'][value]")
-            if checkbox and checkbox.get("value"):
-                num_m = NUM_RE.search(checkbox["value"])
-        if num_m is None:
+            num_m = NUM_RE.search(chave)
+        # Sem número e sem checkbox, a linha é descartada: é ruído (cabeçalho,
+        # separador) e não um documento. Mas um Despacho RESTRITO aparece na
+        # tabela sem checkbox e TEM data, e descartá-lo sumia com o documento
+        # mais recente do processo sem deixar rastro — a planilha passava a
+        # reportar o andamento anterior como se fosse o atual. Por isso a
+        # linha só sai quando não há data legível também.
+        if num_m is None and not (selecionavel is False and data):
             continue
         first_word = label.strip().split()[0] if label.strip().split() else ""
         nodes.append(
             DocNode(
                 serie=first_word,
-                numero=num_m.group(1),
+                numero=num_m.group(1) if num_m else "",
                 data=data,
                 posicao=pos,
+                selecionavel=selecionavel,
             )
         )
     return nodes

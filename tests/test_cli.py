@@ -242,6 +242,23 @@ TREE_SEM_DESPACHO = TREE_WITH_DESPACHO.replace(
     "Despacho 100003 - 15/09/2026", "Nota Técnica 100003 - 15/09/2026"
 )
 
+# Mesmo processo, mas o Despacho mais recente (100003) é restrito: a linha
+# continua na árvore e tem data, só não tem checkbox para marcar. O SEI também
+# pode renderizar o checkbox desabilitado em vez de omitir — as duas formas
+# estão aqui porque dão resultado oposto antes da correção: a linha sem
+# checkbox sumia da lista de candidatos e o processo era gravado com a data
+# antiga, sem aviso nenhum.
+TREE_DESPACHO_RESTRITO_SEM_CHECKBOX = TREE_WITH_DESPACHO.replace(
+    '      <input type="checkbox" value="100003">\n'
+    '      <span class="infraLabel">Despacho 100003 - 15/09/2026</span>',
+    '      <span class="infraLabel">Despacho - 15/09/2026</span>',
+)
+
+TREE_DESPACHO_RESTRITO_CHECKBOX_DESABILITADO = TREE_WITH_DESPACHO.replace(
+    '<input type="checkbox" value="100003">',
+    '<input type="checkbox" value="100003" disabled>',
+)
+
 
 def docs_correlacionados():
     return [
@@ -430,6 +447,141 @@ class FallbackDespachoRestritoTest(unittest.TestCase):
             r = analyze_process(client, self.p, None, False, self.NOW, self.rules)
         self.assertEqual(r.data_ultimo_despacho, "15/09/2026")
         self.assertEqual(client.download_calls, 1)
+
+
+class DespachoRestritoSemCheckboxTest(unittest.TestCase):
+    """Restrito aparece na árvore, mas sem checkbox para marcar.
+
+    Aqui o problema não é o fallback cair no documento errado: é o documento
+    mais recente SUMIR. A linha sem checkbox não tinha número, e o parser
+    descartava qualquer linha sem número — então o processo era gravado com a
+    data do Despacho anterior e sem aviso, como se não tivesse se movido.
+    """
+
+    NOW = "2026-09-22 10:00:00"
+
+    def setUp(self):
+        self.rules = rules_deterministicas()
+        self.p = pr("21260.003436/2026-15")
+
+    def _client(self, tmp, html, b64=PDF_WITH_TEXT_B64):
+        return FakeClient(
+            html=html,
+            docs=docs_correlacionados(),
+            pdf_path=temp_pdf(tmp, "d.pdf", b64) if b64 else None,
+            publicos={"100002"},
+        )
+
+    def test_restrito_sem_checkbox_cai_no_anterior_como_o_restrito_desabilitado(self):
+        """As duas formas de renderizar o restrito dão o mesmo resultado."""
+        for nome, html in (
+            ("sem checkbox", TREE_DESPACHO_RESTRITO_SEM_CHECKBOX),
+            ("checkbox desabilitado", TREE_DESPACHO_RESTRITO_CHECKBOX_DESABILITADO),
+        ):
+            with self.subTest(nome=nome), tempfile.TemporaryDirectory() as tmp:
+                client = self._client(tmp, html)
+                r = analyze_process(client, self.p, None, False, self.NOW, self.rules)
+                self.assertEqual(r.data_ultimo_despacho, "10/09/2026")
+                self.assertEqual(r.situacao, "SCIENTIA CIENCIA")
+
+    def test_restrito_sem_checkbox_avisa_que_existe_mais_recente(self):
+        """O aviso tem que apontar a data do restrito, mesmo sem número.
+
+        É a única forma de o log dizer que o processo andou depois da data
+        gravada: o restrito não tem número para citar, mas tem data.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, TREE_DESPACHO_RESTRITO_SEM_CHECKBOX)
+            with self.assertLogs("sei-insights", level="WARNING") as cap:
+                analyze_process(client, self.p, None, False, self.NOW, self.rules)
+
+        aviso = "\n".join(cap.output)
+        self.assertIn("15/09/2026", aviso)   # o restrito, que não foi lido
+        self.assertIn("100002", aviso)       # o público, que foi lido
+        self.assertIn("10/09/2026", aviso)
+
+    def test_restrito_sem_checkbox_avisa_o_motivo(self):
+        """"Sem download público" é vago; o motivo é não ter checkbox.
+
+        O usuário precisa distinguir "não há PDF porque é restrito" de
+        "falhou a geração" — as duas coisas tomam caminhos de código diferentes.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, TREE_DESPACHO_RESTRITO_SEM_CHECKBOX)
+            with self.assertLogs("sei-insights", level="WARNING") as cap:
+                analyze_process(client, self.p, None, False, self.NOW, self.rules)
+
+        self.assertIn("restrito", "\n".join(cap.output).lower())
+
+    def test_nao_gasta_tentativa_de_download_com_o_restrito(self):
+        """Restrito sem checkbox não tem chave para marcar: não há o que tentar.
+
+        Sem o `numero`, a tentativa seria marcar um checkbox de valor vazio —
+        uma ida à rede e ao CAPTCHA garantidamente inútil.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, TREE_DESPACHO_RESTRITO_SEM_CHECKBOX)
+            analyze_process(client, self.p, None, False, self.NOW, self.rules)
+
+        self.assertEqual(client.tentados, ["100002"])
+
+    def test_hash_de_cache_muda_quando_o_restrito_e_o_mesmo(self):
+        """A identidade do restrito tem de ser estável e distinta da do público.
+
+        Estável, para o cache não reprocessar o processo todo dia; distinta da
+        do público, para que o cache do processo não "bata" por acidente. Como
+        o restrito não tem número, o número é substituído pelo rótulo
+        `restrito` — e é esse rótulo que entra no hash.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp, TREE_DESPACHO_RESTRITO_SEM_CHECKBOX)
+            r = analyze_process(client, self.p, None, False, self.NOW, self.rules)
+
+        self.assertEqual(r.hash_ultimo_despacho,
+                         despacho_hash("restrito|15/09/2026"))
+        self.assertNotEqual(r.hash_ultimo_despacho,
+                            despacho_hash("100002|10/09/2026"))
+
+    def test_hash_identico_na_segunda_execucao_da_no_cache(self):
+        """A correção não pode ter quebrado o cache."""
+        with tempfile.TemporaryDirectory() as tmp:
+            primeira = self._client(tmp, TREE_DESPACHO_RESTRITO_SEM_CHECKBOX)
+            r = analyze_process(primeira, self.p, None, False, self.NOW, self.rules)
+
+            segunda = self._client(tmp, TREE_DESPACHO_RESTRITO_SEM_CHECKBOX)
+            r2 = analyze_process(segunda, self.p, r, False, self.NOW, self.rules)
+
+        self.assertEqual(segunda.download_calls, 0)
+        self.assertEqual(r2.status_coleta, "concluído (cache)")
+        self.assertEqual(r2.hash_ultimo_despacho, r.hash_ultimo_despacho)
+
+    def test_todos_restritos_sem_checkbox_continua_sem_despacho_publico(self):
+        """Nenhum selecionável: mesmo resultado de antes, sem PDF e sem data.
+
+        Os dois restritos aparecem de formas diferentes de propósito — um sem
+        checkbox, outro com checkbox desabilitado. Nenhum dos dois é
+        selecionável, então nenhum vira tentativa.
+        """
+        html = TREE_WITH_DESPACHO.replace(
+            '      <input type="checkbox" value="100003">',
+            '      <input type="checkbox" value="100003" disabled>',
+        ).replace(
+            '      <input type="checkbox" value="100002">\n'
+            '      <span class="infraLabel">Despacho 100002 - 10/09/2026</span>',
+            '      <span class="infraLabel">Despacho - 10/09/2026</span>',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(
+                html=html,
+                docs=docs_correlacionados(),
+                pdf_path=temp_pdf(tmp, "d.pdf", PDF_WITH_TEXT_B64),
+                publicos=set(),
+            )
+            r = analyze_process(client, self.p, None, False, self.NOW, self.rules)
+
+        self.assertEqual(r.situacao, "Sem despacho público")
+        self.assertEqual(r.data_ultimo_despacho, "")
+        self.assertEqual(client.tentados, [])
 
 
 class AnalyzePipelineTest(unittest.TestCase):

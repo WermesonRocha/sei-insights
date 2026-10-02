@@ -668,3 +668,93 @@ class CandidatosDespachoTest(unittest.TestCase):
             ("15/09/2026", "100003"),
         )
         self.assertEqual(select_last_despacho(nodes).numero, "100003")
+
+
+# O SEI renderiza o Despacho restrito na tabela como os demais, mas nele não
+# dá para marcar o checkbox nem gerar PDF. Como isso aparece no HTML muda o
+# resultado, e uma das formas FAZIA o Despacho restrito desaparecer da árvore
+# sem aviso — a planilha mostrava o andamento antigo como se fosse o atual.
+ARVORE_COM_DESESPACHO_NORMAL = """
+<div class="infraArvore">
+<table id="tblDocumentos">
+ <tr><th>Documento</th><th>Tipo</th><th>Data</th><th>Data de Inclusao</th></tr>
+ <tr><td><input type="checkbox" value="66654831"><label title="Despacho"></label></td>
+     <td>Despacho</td><td>17/04/2026</td><td>30/06/2026 14:00</td></tr>
+ {extra}
+</table>
+</div>
+"""
+
+DESPACHO_SEM_CHECKBOX = """
+ <tr><td><label title="Despacho"></label></td>
+     <td>Despacho</td><td>05/07/2026</td><td>05/07/2026 09:00</td></tr>
+"""
+
+DESPACHO_CHECKBOX_DESABILITADO = """
+ <tr><td><input type="checkbox" value="99999999" disabled>
+     <label title="Despacho"></label></td>
+     <td>Despacho</td><td>05/07/2026</td><td>05/07/2026 09:00</td></tr>
+"""
+
+
+class DespachoRestritoTest(unittest.TestCase):
+    """Despacho que aparece na árvore mas não pode ser baixado."""
+
+    def test_despacho_normal_e_selecionavel(self):
+        nodes = parse_tree(ARVORE_COM_DESESPACHO_NORMAL.format(extra=""))
+        despacho = select_last_despacho(nodes)
+        self.assertEqual(despacho.numero, "66654831")
+        self.assertTrue(despacho.selecionavel)
+
+    def test_despacho_sem_checkbox_continua_na_arvore(self):
+        """Restrito sem checkbox SOME da lista de candidatos se for ignorado.
+
+        É o modo de falha que motivou isto: o Despacho de 05/07 existia e era
+        o mais recente, mas sumia, e o processo passava a reportar 30/06 sem
+        nenhum sinal. Perder o documento mais recente é pior que reportá-lo
+        como não baixável.
+        """
+        nodes = parse_tree(
+            ARVORE_COM_DESESPACHO_NORMAL.format(extra=DESPACHO_SEM_CHECKBOX)
+        )
+        self.assertEqual(len(nodes), 2)
+        mais_recente = select_last_despacho(nodes)
+        self.assertEqual(mais_recente.data, "05/07/2026")
+        self.assertFalse(mais_recente.selecionavel)
+
+    def test_checkbox_desabilitado_marca_como_nao_selecionavel(self):
+        nodes = parse_tree(
+            ARVORE_COM_DESESPACHO_NORMAL.format(
+                extra=DESPACHO_CHECKBOX_DESABILITADO
+            )
+        )
+        restrito = [n for n in nodes if n.data == "05/07/2026"][0]
+        self.assertFalse(restrito.selecionavel)
+
+    def test_restrito_sem_checkbox_nao_inventa_numero_para_marcar(self):
+        """`numero` é a chave que marca o checkbox, e sem checkbox não há chave.
+
+        Inventar um número (o do documento, por exemplo) faria o download
+        tentar marcar um documento que não existe, ou pior, marcar o
+        checkbox de outro.
+        """
+        nodes = parse_tree(
+            ARVORE_COM_DESESPACHO_NORMAL.format(extra=DESPACHO_SEM_CHECKBOX)
+        )
+        restrito = [n for n in nodes if n.data == "05/07/2026"][0]
+        self.assertEqual(restrito.numero, "")
+
+    def test_o_restrito_continua_sendo_o_mais_recente(self):
+        """A ordenação é por data, não por baixabilidade.
+
+        Se o restrito deixasse de ser o primeiro candidato, o log deixaria de
+        dizer que existe um Despacho mais novo, e a ordem do fallback
+        passaria a esconder exatamente o que ele existe para revelar.
+        """
+        nodes = parse_tree(
+            ARVORE_COM_DESESPACHO_NORMAL.format(extra=DESPACHO_SEM_CHECKBOX)
+        )
+        candidatos = despachos_ordenados(nodes)
+        self.assertEqual([c.data for c in candidatos], ["05/07/2026", "30/06/2026"])
+        self.assertFalse(candidatos[0].selecionavel)
+        self.assertTrue(candidatos[1].selecionavel)
