@@ -32,7 +32,7 @@ _META_PARAGRAPH = re.compile(
     re.IGNORECASE,
 )
 _RECIPIENT_LINE = re.compile(
-    r"(?m)^[ \t]*(?:Aos|Ao|Às|À)\s+", re.IGNORECASE
+    r"(?m)^[ \t]*(?:Aos|Ao|Às|À)\s+(?!\d{1,2}:\d{2})", re.IGNORECASE
 )
 _DESTINO_FIELD = re.compile(
     r"^[ \t]*(?:Destino|Destinat[áa]rio)[ \t]*[:.]?[ \t]*(.*)$",
@@ -40,9 +40,14 @@ _DESTINO_FIELD = re.compile(
 )
 # O bloco de assinatura vem sempre no fim: do primeiro marcador até o final não
 # há conteúdo do despacho (cargo/unidade da signatária não é destinatário).
+# A saudação de fecho entra como marcador porque o nome/cargo/faixa de unidade
+# do signatário vêm DEPOIS dela e ANTES do "Documento assinado eletronicamente";
+# sem isso a faixa de unidade ("MMULHERES-SE-SGA-CGAO-CPSG") ficava no corpo e
+# a regra de sigla a lia como destino (regressão 12804.000290/2026-62).
 _SIGNATURE_START = re.compile(
     r"^\s*(?:assinado digitalmente|"
     r"documento assinado eletronicamente|documento assinado por|"
+    r"atenciosamente\b|respeitosamente\b|"
     r"a autenticidade deste documento)",
     re.IGNORECASE,
 )
@@ -104,6 +109,18 @@ def _recipient_from_paragraph(para: str) -> str:
 
 def _split_body(text: str) -> tuple[str, str]:
     paras = _paragraphs(text)
+    # O bloco de assinatura vem sempre no fim e é cortado ANTES de procurar o
+    # destinatário. O destinatário era procurado primeiro, e a linha do
+    # horário da assinatura ("às 12:32, conforme horário oficial...") começa
+    # com "às" — `_RECIPIENT_LINE` casava com ela e a assinatura INTEIRA virava
+    # destinatário (regressão 12804.000290/2026-62). Como o bloco não tem
+    # conteúdo de despacho, tirá-lo do caminho primeiro não perde cabeçalho
+    # válido: o cabeçalho `À/Ao` é anterior à assinatura.
+    sig_idx = next(
+        (i for i, p in enumerate(paras) if _SIGNATURE_START.match(p)), None
+    )
+    if sig_idx is not None:
+        paras = paras[:sig_idx]
     # Precedência: campo `Destino:` (rótulo explícito do SEI) > linha
     # `À/Ao/Aos/Às`. Sem os dois, o corpo começa depois do timbrado.
     field_idx = next((i for i, p in enumerate(paras) if _DESTINO_FIELD.match(p)), None)
@@ -126,11 +143,6 @@ def _split_body(text: str) -> tuple[str, str]:
     if recip_idx is None:
         while start < len(paras) and _is_letterhead(paras[start]):
             start += 1
-    # Corta o bloco de assinatura: nunca é conteúdo do despacho.
-    for i in range(start, len(paras)):
-        if _SIGNATURE_START.match(paras[i]):
-            paras = paras[:i]
-            break
     body = [p for p in paras[start:] if not _META_PARAGRAPH.match(p)]
     return recipient, " ".join(re.sub(r"\s+", " ", p) for p in body)
 
@@ -222,7 +234,24 @@ class RulesEngine:
         normalized = re.sub(r"\s+", " ", body).strip()
         result = RuleResult(**self.fallback)
         for rule in self.rules:
-            m = re.search(rule["pattern"], normalized, re.IGNORECASE)
+            restrito = rule.get("pattern_sem_cabecalho")
+            if restrito and not destino_cabecalho:
+                # Sem cabeçalho, a regra genérica de unidade fica mais estrita:
+                # menção a nome completo ("Coordenação de ...") não é destino.
+                # Se nem o padrão estrito casar, a regra genérica "reconhece" a
+                # unidade mas a rejeita como destino: para aqui no fallback, em
+                # vez de deixar regras posteriores (ex.: órgão externo) casarem
+                # boilerplate/título do documento (regressão 12804.000815/2026-60).
+                if re.search(restrito, normalized, re.IGNORECASE) is None:
+                    if re.search(rule["pattern"], normalized, re.IGNORECASE):
+                        result = RuleResult(**self.fallback)
+                        break
+                    continue
+                m = re.search(restrito, normalized, re.IGNORECASE)
+            else:
+                # Com cabeçalho o destino já vem dele e a regra só fraseia a
+                # situação ("Em {destino}"), então o padrão largo continua.
+                m = re.search(rule["pattern"], normalized, re.IGNORECASE)
             if m:
                 def sub(val: str) -> str:
                     try:

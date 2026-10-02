@@ -316,6 +316,57 @@ class RegraGenericaInternaTest(unittest.TestCase):
         self.assertEqual(r.destino, "Coordenação")
         self.assertEqual(r.situacao, "Em Coordenação")
 
+    def test_mencao_a_nome_completo_de_unidade_nao_vira_destino(self):
+        """Regressão 12804.000290/2026-62: menção a nome completo não é destino.
+
+        O corpo diz "recebidos pela Coordenação de Patrimônio e Serviços
+        Gerais (CPSG)" — cita a unidade do próprio signatário. A regra
+        genérica pegava o substantivo solto ("Coordenação") e a planilha
+        passava a mostrar um destino que não existe.
+        """
+        r = self.engine.classify(
+            "DESPACHO\n\n"
+            "Informamos que os bens foram devidamente recebidos pelo "
+            "Ministério das Mulheres, e foram recebidos pela Coordenação de "
+            "Patrimônio e Serviços Gerais (CPSG).\n"
+        )
+        self.assertEqual(r.destino, "")
+
+    def test_com_cabecalho_unidade_citada_no_corpo_nao_muda_a_situacao(self):
+        """Com cabeçalho, a menção a uma unidade no corpo não reescreve nada.
+
+        O destino vem do cabeçalho (CGATI) e a regra genérica apenas fraseia
+        a situação. Tornar o padrão estrito só vale SEM cabeçalho — do
+        contrário processos com cabeçalho perdiam "Em {destino}" e viravam
+        "Em análise" à toa.
+        """
+        cfg = json.loads(Path("regras.json").read_text(encoding="utf-8"))
+        internas = [r for r in cfg["regras"] if r["situacao"] == "Em {destino}"]
+        engine = RulesEngine({"regras": internas, "siglas": cfg["siglas"]})
+        r = engine.classify(
+            "MINISTÉRIO DAS MULHERES\nSecretaria-Executiva\n\n"
+            "DESPACHO\n\n"
+            "À Coordenação-Geral de Administração e Tecnologia da Informação\n\n"
+            "Solicito que a Secretaria de Serviços Compartilhados seja acionada."
+        )
+        self.assertEqual(r.destino, "CGATI")
+        self.assertEqual(r.situacao, "Em CGATI")
+
+    def test_sem_cabecalho_nome_de_unidade_nao_deixa_regra_externa_vencer(self):
+        """Sem cabeçalho, a menção a nome de unidade para no fallback.
+
+        Regressão 12804.000815/2026-60: o corpo cita "Coordenação de ..." e
+        também traz "TCU" em boilerplate (SICAF/CEIS). O modo estrito não pode
+        deixar a regra de órgão externo casar o boilerplate e inventar destino.
+        """
+        r = self.engine.classify(
+            "DESPACHO\n\n"
+            "Consulta Consolidada TCU sobre fornecedores.\n\n"
+            "Os bens foram recebidos pela Coordenação de Patrimônio e Serviços "
+            "Gerais (CPSG).\n"
+        )
+        self.assertEqual(r.destino, "")
+
     def test_apreciacao_e_acao_reconhecida(self):
         """Regressão 21260.001144/2026-30 e 21260.003895/2026-91.
 
@@ -733,3 +784,145 @@ DESPACHO_001106 = (
     "A autenticidade deste documento pode ser conferida no site\n"
     "https://colaboragov.sei.gov.br/sei/controlador/"
 )
+
+
+# Regressão real 12804.000290/2026-62: a extração do PDF quebrou a linha do
+# horário da assinatura de modo que ela COMEÇA com "às 12:32". O motor
+# procurava o destinatário ANTES de cortar o bloco de assinatura, então
+# `_RECIPIENT_LINE` casava com esse "às" e a assinatura inteira virava
+# destinatário. O despacho não tem cabeçalho `Ao/À`, só `Assunto:` — o correto
+# é destino vazio, nunca o texto da assinatura.
+DESPACHO_SEM_DESTINATARIO_HORARIO_NA_ASSINATURA = (
+    "MINISTÉRIO DAS MULHERES\n"
+    "Secretaria-Executiva\n"
+    "Subsecretaria de Gestão e Administração\n"
+    "Coordenação-Geral de Administração e Orçamento\n"
+    "Coordenação de Patrimônio e Serviços Gerais\n\n"
+    "DESPACHO Nº 92/2026/CPSG/CGAO/SGA/SE-MMULHERES\n\n"
+    "Processo nº 21260.001108/2025-95\n\n"
+    "Assunto: Recebimento de bens no SIADS\n\n"
+    "Informamos que os bens foram devidamente recebidos pelo Ministério das "
+    "Mulheres, conforme consta nos termos de transferência nº ( 59640250 ) e "
+    "( 60470909 ), e foram recebidos pela Coordenação de Patrimônio e Serviços "
+    "Gerais (CPSG), conforme registrado nas Notas de Lançamentos.\n\n"
+    "Atenciosamente,\n\n"
+    "DHEYMESON BIDÓ DE LIMA\n"
+    "Coordenador de Patrimônio e Serviços Gerais\n"
+    "MMULHERES-SE-SGA-CGAO-CPSG\n\n"
+    "Documento assinado eletronicamente por \n"
+    "Dheymeson Bido de Lima\n"
+    ", \n"
+    "Coordenador(a)\n"
+    ", em 17/04/2026,\n"
+    "às 12:32, conforme horário oficial de Brasília, com fundamento no § 3º "
+    "do art. 4º do\n"
+    "Decreto nº 10.543, de 13 de novembro de 2020\n"
+    ".\n"
+    "A autenticidade deste documento pode ser conferida no site\n"
+    "https://colaboragov.sei.gov.br/sei/controlador_externo.php?\n"
+    "acao=documento_conferir&id_orgao_acesso_externo=0\n"
+    ", informando o código verificador 60531227 e o código CRC 8D8D8577\n"
+    ".\n"
+    "Referência: Processo nº 12804.000290/2026-62.\n"
+)
+
+# Mesmo fenômeno, mas COM destinatário no cabeçalho: aqui o horário está no
+# meio da linha (`em 31/03/2026, às 09:57`), que é o caso que sempre funcionou.
+# Serve para garantir que o corte da assinatura não apaga o destinatário real.
+DESPACHO_COM_DESTINATARIO_HORARIO_NA_ASSINATURA = (
+    "MINISTÉRIO DA GESTÃO E DA INOVAÇÃO EM SERVIÇOS PÚBLICOS\n"
+    "Secretaria de Serviços Compartilhados\n"
+    "Departamento de Administração e Logística\n"
+    "Coordenação-Geral de Informação e Patrimônio\n"
+    "Coordenação de Gestão de Almoxarifado e Patrimônio\n"
+    "Divisão de Material e de Patrimônio\n\n"
+    "DESPACHO\n\n"
+    "Processo nº 12804.000767/2025-51\n\n"
+    "Ao SEMIB.\n\n"
+    "Encaminho para providências quanto à movimentação dos bens do Termo de "
+    "Transferência Externa de Bens ( 59640250 ). Após a entrega, restituir o "
+    "processo a esta DIMAP para demais providências.\n\n"
+    "Brasília, na data de assinatura.\n\n"
+    "Documento assinado eletronicamente\n"
+    "MARIA DE FÁTIMA ARAUJO\n"
+    "Chefe de Divisão Substituta\n\n"
+    "Documento assinado eletronicamente por \n"
+    "Maria de Fátima Araújo\n"
+    ", \n"
+    "Chefe(a) de Divisão\n"
+    "Substituto(a)\n"
+    ", em 31/03/2026, às 09:57, conforme horário oficial de Brasília, com "
+    "fundamento no § 3º\n"
+    "do art. 4º do \n"
+    "Decreto nº 10.543, de 13 de novembro de 2020\n"
+    ".\n"
+    "A autenticidade deste documento pode ser conferida no site\n"
+    "https://colaboragov.sei.gov.br/sei/controlador_externo.php?\n"
+    "acao=documento_conferir&id_orgao_acesso_externo=0\n"
+    ", informando o código verificador 59640583 e o código CRC 8E3E37F5\n"
+    ".\n"
+)
+
+
+class HorarioDaAssinaturaNaoViraDestinoTest(unittest.TestCase):
+    """Regressão 12804.000290/2026-62.
+
+    O bloco de assinatura vem no fim e é cortado, mas o destinatário era
+    procurado ANTES desse corte. Quando a extração quebra a linha do horário
+    ("às 12:32, conforme...") no começo de uma linha, `_RECIPIENT_LINE` casa
+    com o "às" e a assinatura inteira vira destinatário.
+    """
+
+    ENGINE = RulesEngine.from_file(Path("regras.json"))
+
+    def test_horario_da_assinatura_nao_e_o_destino(self):
+        r = self.ENGINE.classify(DESPACHO_SEM_DESTINATARIO_HORARIO_NA_ASSINATURA)
+        # O que importa: NADA do bloco de assinatura pode aparecer no destino.
+        for lixo in ("conforme horário", "autenticidade", "código CRC",
+                     "verificador", "Decreto", "12:32", "assinado"):
+            self.assertNotIn(lixo, r.destino)
+            self.assertNotIn(lixo, r.situacao)
+        # Sem cabeçalho `À/Ao`, a menção à unidade do signatário também não
+        # conta como destino; o correto é não indicar destino.
+        self.assertEqual(r.destino, "")
+
+    def test_destinatario_real_continua_sendo_lido(self):
+        r = self.ENGINE.classify(DESPACHO_COM_DESTINATARIO_HORARIO_NA_ASSINATURA)
+        self.assertEqual(r.destino, "SEMIB")
+
+    def test_corpo_do_despacho_nao_e_cortado_junto(self):
+        """O corte da assinatura não pode engolir o corpo do despacho."""
+        r = self.ENGINE.classify(DESPACHO_COM_DESTINATARIO_HORARIO_NA_ASSINATURA)
+        self.assertNotEqual(r.situacao, "Em análise")
+
+    def test_linha_de_horario_sem_marcador_de_assinatura_nao_vira_destino(self):
+        """Sem o marcador "documento assinado", não há bloco a cortar.
+
+        A linha do horário sozinha não pode ser lida como cabeçalho `À/Ao`:
+        é defesa em profundidade para o caso de o PDF não trazer o marcador.
+        """
+        texto = (
+            "DESPACHO\n\n"
+            "Informamos o recebimento dos bens.\n\n"
+            "às 12:32, conforme horário oficial de Brasília.\n"
+        )
+        r = self.ENGINE.classify(texto)
+        self.assertEqual(r.destino, "")
+
+    def test_faixa_de_unidade_do_signatario_nao_vira_destino(self):
+        """Nome/cargo/faixa de unidade vêm depois de "Atenciosamente,".
+
+        A faixa `MMULHERES-SE-SGA-CGAO-CPSG` traz a sigla `SGA`, que a regra
+        genérica de unidade leria como destino se o bloco da assinatura não
+        fosse cortado a partir da saudação de fecho.
+        """
+        texto = (
+            "DESPACHO\n\n"
+            "Informamos o recebimento dos bens.\n\n"
+            "Atenciosamente,\n\n"
+            "FULANO DE TAL\n"
+            "Coordenador\n"
+            "MMULHERES-SE-SGA-CGAO-CPSG\n"
+        )
+        r = self.ENGINE.classify(texto)
+        self.assertEqual(r.destino, "")
