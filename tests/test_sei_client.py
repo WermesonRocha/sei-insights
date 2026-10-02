@@ -7,9 +7,12 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from sei_insights.clients.sei_client import (
     MAX_RETRIES,
+    CriteriosNaoAplicados,
     ProcessResult,
     PublicDocument,
     SeiClient,
+    criterios_faltantes,
+    count_rows,
     extract_process,  # extract_process is a module function below
 )
 
@@ -46,6 +49,30 @@ class IsSearchResponseTest(unittest.TestCase):
     def test_rejeita_outro_ajax(self):
         r = FakeResp("POST", "?acao_ajax_externo=outra_coisa&isPaginacao=false")
         self.assertFalse(SeiClient.is_search_response(r))
+
+
+class CountRowsTest(unittest.TestCase):
+    """`count_rows` conta linhas, e a classe do SEI é `pesquisaTituloRegistro`.
+
+    É a mesma classe que o JS da página conta em `verificarRegistros()`
+    ($('table tbody tr.pesquisaTituloRegistro').length).
+    """
+
+    def test_conta_linhas_pela_classe_do_sei(self):
+        html = "".join(
+            f"<tr class='pesquisaTituloRegistro' data-prot='21260.{i:07d}/2026-15'></tr>"
+            for i in range(3)
+        )
+        self.assertEqual(count_rows({"html": html}), 3)
+
+    def test_conta_linhas_repetidas_do_mesmo_processo(self):
+        """50 linhas podem ser de poucos processos: contam-se as linhas."""
+        html = _result_rows([f"21260.000000/2026-{i:02d}" for i in range(50)])
+        self.assertEqual(count_rows({"html": html}), 50)
+
+    def test_html_vazio(self):
+        self.assertEqual(count_rows({"html": ""}), 0)
+        self.assertEqual(count_rows({}), 0)
 
 
 class ExtractProcessTest(unittest.TestCase):
@@ -92,6 +119,113 @@ class _ExpectResponse:
         return self.response
 
 
+class CriteriosDaBuscaTest(unittest.TestCase):
+    """A busca só pode começar com TODOS os critérios realmente marcados.
+
+    Sem o id da unidade o SEI não restringe nada e devolve o recorte do órgão
+    inteiro; com órgão/checkbox faltando, o recorte muda. Era degradação
+    silenciosa (só warning). Agora qualquer item faltando impede a busca.
+    """
+
+    UNIDADE = "MMULHERES-SE-SGA-CGATI-CTI"
+
+    def _completo(self, **overrides):
+        estado = {
+            "checkboxes": {"chkSinProcessos": True,
+                           "chkSinDocumentosGerados": True,
+                           "chkSinDocumentosRecebidos": True},
+            "orgao": ["11"],
+            "unidade_id": "110011380",
+            "unidade_texto": self.UNIDADE,
+        }
+        estado.update(overrides)
+        return estado
+
+    def test_tudo_marcado_passa(self):
+        self.assertEqual(criterios_faltantes(self._completo(), "11", self.UNIDADE), [])
+
+    def test_rotulo_completo_da_unidade_passa(self):
+        """O SEI mostra 'código - nome' no autocomplete; deve ser aceito."""
+        estado = self._completo(
+            unidade_texto=f"{self.UNIDADE} - Coordenação de Tecnologia da Informação")
+        self.assertEqual(criterios_faltantes(estado, "11", self.UNIDADE), [])
+
+    def test_unidade_nao_aplicada_e_erro(self):
+        for id_ in ("", "   ", None):
+            with self.subTest(unidade_id=id_):
+                estado = self._completo(unidade_id=id_ or "")
+                faltando = criterios_faltantes(estado, "11", self.UNIDADE)
+                self.assertTrue(faltando)
+                self.assertIn("unidade", " ".join(faltando).lower())
+
+    def test_unidade_divergente_e_erro(self):
+        estado = self._completo(unidade_texto="MMULHERES-SE-SGA-CGATI-CTI-DTI")
+        faltando = criterios_faltantes(estado, "11", self.UNIDADE)
+        self.assertTrue(faltando)
+
+    def test_cada_checkbox_desmarcado_e_erro(self):
+        for nome in ("chkSinProcessos", "chkSinDocumentosGerados",
+                     "chkSinDocumentosRecebidos"):
+            with self.subTest(checkbox=nome):
+                cbs = {"chkSinProcessos": True, "chkSinDocumentosGerados": True,
+                       "chkSinDocumentosRecebidos": True}
+                cbs[nome] = False
+                faltando = criterios_faltantes(self._completo(checkboxes=cbs),
+                                               "11", self.UNIDADE)
+                self.assertEqual(len(faltando), 1)
+                self.assertIn(nome, faltando[0])
+
+    def test_orgao_ausente_e_erro(self):
+        faltando = criterios_faltantes(self._completo(orgao=[]), "11", self.UNIDADE)
+        self.assertTrue(any("rgao" in f or "órgão" in f for f in faltando))
+
+    def test_selecionar_todos_sem_o_orgao_alvo_e_erro(self):
+        """O fallback 'selecionar todos os órgãos' é o que a barra reprova."""
+        faltando = criterios_faltantes(self._completo(orgao=["1", "2", "3"]),
+                                       "11", self.UNIDADE)
+        self.assertTrue(any("órgão" in f for f in faltando))
+
+    def test_orgao_alvo_presente_na_lista_passa(self):
+        self.assertEqual(
+            criterios_faltantes(self._completo(orgao=["1", "2", "11"]),
+                                "11", self.UNIDADE), [])
+
+    def test_orgao_sem_mapeamento_e_erro(self):
+        """Órgão não mapeado não pode virar 'todos os órgãos' silencioso."""
+        faltando = criterios_faltantes(self._completo(), "", self.UNIDADE)
+        self.assertTrue(any("órgão" in f for f in faltando))
+
+    def test_verificacao_levanta_antes_de_buscar(self):
+        class _Page:
+            def evaluate(self, *a, **k):
+                return {"checkboxes": {"chkSinProcessos": True,
+                                       "chkSinDocumentosGerados": True,
+                                       "chkSinDocumentosRecebidos": True},
+                        "orgao": ["11"], "unidade_id": "", "unidade_texto": ""}
+
+        client = SeiClient.__new__(SeiClient)
+        client.page = _Page()
+        client.save_debug = lambda *a, **k: None
+        with self.assertRaises(CriteriosNaoAplicados) as ctx:
+            client._verify_search_criteria("MMULHERES", self.UNIDADE)
+        self.assertIn("unidade", str(ctx.exception).lower())
+
+    def test_verificacao_passa_com_dom_completo(self):
+        class _Page:
+            def evaluate(self, *a, **k):
+                return {"checkboxes": {"chkSinProcessos": True,
+                                       "chkSinDocumentosGerados": True,
+                                       "chkSinDocumentosRecebidos": True},
+                        "orgao": ["11"], "unidade_id": "110011380",
+                        "unidade_texto": self_unidade}
+
+        self_unidade = self.UNIDADE
+        client = SeiClient.__new__(SeiClient)
+        client.page = _Page()
+        client.save_debug = lambda *a, **k: None
+        client._verify_search_criteria("MMULHERES", self.UNIDADE)  # não levanta
+
+
 class _FakePage:
     def __init__(self, first_response):
         self._first_response = first_response
@@ -101,6 +235,26 @@ class _FakePage:
 
     def wait_for_timeout(self, *args, **kwargs):
         pass
+
+
+class _SequencePage(_FakePage):
+    """Page fake que devolve uma resposta diferente por submit.
+
+    Cada `expect_response` consome o próximo item da fila (reabastecida com
+    o último quando acaba) — reproduz o SEI recarregando o CAPTCHA a cada
+    busca (`updateCaptcha()` no `.always()`), então cada tentativa tem uma
+    resposta diferente.
+    """
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self._last = self._responses[-1]
+        self.submits = 0
+
+    def expect_response(self, predicate, timeout=None):
+        index = min(self.submits, len(self._responses) - 1)
+        self.submits += 1
+        return _ExpectResponse(_FakeResponse(self._responses[index]))
 
 
 class _FakeResponse:
@@ -203,9 +357,12 @@ class _OrderPaginationClient(_PaginationClient):
 class PaginationLoopTest(unittest.TestCase):
     """Pina a semântica do loop de paginação sem navegador/rede.
 
-    Contrato real do SEI (spike:100,126): resposta AJAX é {"html": ...}
-    sem itens; a paginação termina quando uma página vem curta/vazia e
-    expected_total é apenas limite adicional quando itens existe.
+    Contrato real do SEI (JS de md_pesq_pesquisa.php, função
+    verificarRegistros): a resposta AJAX traz `itens` com o total de
+    resultados (`qtdeItens = data.itens`) e o navegador carrega mais
+    páginas enquanto `buscaInicio < qtdeItens`, com `rowsSolr = 50`.
+    Sem `itens` no JSON (formato de CAPTCHA rejeitado), vale o critério
+    antigo de página cheia.
     """
 
     def test_pagina_final_curta_para_loop(self):
@@ -243,6 +400,110 @@ class PaginationLoopTest(unittest.TestCase):
         self.assertEqual(client.fetch_calls, [])
         self.assertEqual(client.captcha_calls, 1)
 
+    def test_pagina_cheia_de_linhas_repetidas_ainda_pagina(self):
+        """Uma página cheia de LINHAS pode conter poucos processos.
+
+        A pesquisa marca processos (P), documentos gerados (G) e documentos
+        recebidos (R): várias linhas são documentos do mesmo processo-pai, e
+        o número se repete. Encerrar o loop pelo número de processos ÚNICOS
+        (22 < 50) faz o coletor achar que acabou na primeira página e nunca
+        pede a segunda — o resultado sai truncado e sem aviso.
+        """
+        distintos = _numbers(0, 22)
+        repetidas = [distintos[i % 22] for i in range(50)]  # 50 linhas, 22 processos
+        first = {"html": _result_rows(repetidas)}
+        segunda = {"html": _result_rows(_numbers(100, 8))}
+        client = _PaginationClient(first, [segunda])
+
+        results = client.search_processes(
+            "MMULHERES", "U", "01/01/2026", "31/03/2026")
+
+        self.assertEqual(client.fetch_calls, [(50, 50)],
+                         "a página 1 veio cheia (50 linhas): deveria paginar")
+        self.assertEqual(len(results), 30, "22 da pág. 1 + 8 da pág. 2")
+
+    def test_pagina_curta_nao_pula_linhas(self):
+        """Página curta faz o próximo offset pular linhas.
+
+        Caso real (01/01/2026 a 31/03/2026): o SEI informou 183 e a primeira
+        página veio com 47 linhas. Como o offset seguinte somava `page_size`
+        (50) em vez das 47 linhas lidas, as linhas de offset 47, 48 e 49
+        nunca eram pedidas — 180 linhas lidas contra 183 informadas.
+        """
+        primeira = {"html": _result_rows(_numbers(0, 47)), "itens": 183}
+        segunda = {"html": _result_rows(_numbers(47, 50)), "itens": 183}
+        terceira = {"html": _result_rows(_numbers(97, 50)), "itens": 183}
+        quarta = {"html": _result_rows(_numbers(147, 36)), "itens": 183}
+        client = _PaginationClient(primeira, [segunda, terceira, quarta])
+
+        client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
+
+        self.assertEqual(
+            client.fetch_calls, [(47, 50), (97, 50), (147, 50)],
+            "o offset deve avançar pelas linhas realmente lidas, não por page_size",
+        )
+
+    def test_log_conta_linhas_lidas_e_o_offset_de_cada_pagina(self):
+        """O log por página é o que fecha a auditoria da cobertura.
+
+        Uma execução real leu 5 páginas e informou 183 linhas. Registrar o
+        offset pedido e as linhas recebidas deixa visível qual página veio
+        curta; sem isso só se vê o total de processos, que não distingue
+        cobertura completa de buraco silencioso.
+        """
+        primeira = {"html": _result_rows(_numbers(0, 47)), "itens": 183}
+        segunda = {"html": _result_rows(_numbers(47, 50)), "itens": 183}
+        terceira = {"html": _result_rows(_numbers(97, 50)), "itens": 183}
+        quarta = {"html": _result_rows(_numbers(147, 33)), "itens": 183}
+        quinta = {"html": _result_rows(_numbers(180, 3)), "itens": 183}
+        client = _PaginationClient(
+            primeira, [segunda, terceira, quarta, quinta])
+
+        with self.assertLogs("sei-insights", level="INFO") as cap:
+            client.search_processes(
+                "MMULHERES", "U", "01/01/2026", "31/03/2026")
+
+        texto = "\n".join(cap.output)
+        for offset in ("offset 0", "offset 47", "offset 97", "offset 147",
+                       "offset 180"):
+            self.assertIn(offset, texto)
+        self.assertIn("183 linha(s) lida(s) de 183 informada(s)", texto)
+
+    def test_pagina_ate_o_total_informado_pelo_sei(self):
+        """`data.itens` é o total do servidor e manda na paginação.
+
+        O JS do próprio SEI (verificarRegistros) carrega mais páginas
+        enquanto `buscaInicio < qtdeItens`, com `qtdeItens = data.itens`.
+        Uma página pode ter menos de 50 linhas e mesmo assim haver muito
+        mais resultado: encerrar em "página curta" truncava a busca.
+        """
+        primeira = {"html": _result_rows(_numbers(0, 20)), "itens": 120}
+        segunda = {"html": _result_rows(_numbers(20, 50)), "itens": 120}
+        terceira = {"html": _result_rows(_numbers(70, 50)), "itens": 120}
+        client = _PaginationClient(primeira, [segunda, terceira])
+
+        results = client.search_processes(
+            "MMULHERES", "U", "01/01/2026", "31/03/2026")
+
+        self.assertEqual(client.fetch_calls, [(20, 50), (70, 50)])
+        self.assertEqual(len(results), 120)  # 20 + 50 + 50 = o total do SEI
+
+    def test_total_zerado_cai_no_comportamento_antigo(self):
+        """Sem `itens` (formato de CAPTCHA rejeitado) mantém o critério antigo."""
+        primeira = {"html": _result_rows(_numbers(0, 50))}
+        curta = {"html": _result_rows(_numbers(50, 12))}
+        client = _PaginationClient(primeira, [curta])
+        results = client.search_processes("MMULHERES", "U", "01/09/2026", "22/09/2026")
+        self.assertEqual(client.fetch_calls, [(50, 50)])
+        self.assertEqual(len(results), 62)
+
+    def test_pagina_vazia_no_meio_avisa_em_vez_de_truncar(self):
+        """Página vazia com total pendente é o outro modo de trunção calada."""
+        primeira = {"html": _result_rows(_numbers(0, 10)), "itens": 300}
+        client = _PaginationClient(primeira, [{"html": ""}])
+        with self.assertLogs("sei-insights", level="WARNING"):
+            client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
+
     def test_captcha_resolvido_antes_de_preencher_criterios(self):
         client = _OrderPaginationClient(
             {"html": _result_rows(_numbers(0, 10))}, []
@@ -254,6 +515,117 @@ class PaginationLoopTest(unittest.TestCase):
             client.events.index("solve_captcha"),
             client.events.index("set_criteria"),
         )
+
+
+CAPTCHA_ERROR_HTML = (
+    "<consultavazia><div class='sem-resultado'>"
+    "<p class='alert alert-danger'>Código de confirmação inválido 1.</p>"
+    "</div></consultavazia>"
+)
+
+
+class _CaptchaRetryClient(SeiClient):
+    """SeiClient drive com respostas de submit roteirizadas por tentativa.
+
+    Reproduz o bug real: o 1º submit volta com CAPTCHA rejeitado (HTTP 200 +
+    HTML de erro) e o SEI recarrega a imagem via `updateCaptcha()`, então
+    cada novo submit precisa de um CAPTCHA novo.
+    """
+
+    def __init__(self, submit_responses, scripted_pages=None):
+        self.page = _SequencePage(submit_responses)
+        self.context = _FakeContext()
+        self.rate_limiter = _DummyRateLimiter()
+        self.use_manual_captcha = False
+        self.captcha_calls = 0
+        self.criteria_calls = 0
+        self._scripted = list(scripted_pages or [])
+
+    def open_search_page(self):
+        return None
+
+    def _set_search_criteria(self, orgao, unidade, inicio, fim):
+        self.criteria_calls += 1
+        return None
+
+    def solve_search_captcha(self):
+        self.captcha_calls += 1
+
+    def submit_search(self):
+        return None
+
+    def _fetch_page(self, inicio, page_size):
+        # Repete a última resposta roteirizada: em retry de CAPTCHA a mesma
+        # página é requisitada de novo e volta igual.
+        index = min(
+            MAX_RETRIES - len(self._scripted),
+            len(self._scripted) - 1,
+        )
+        return self._scripted[max(index, 0)] if self._scripted else {"html": ""}
+
+
+class SearchCaptchaRetryTest(unittest.TestCase):
+    """Pina o retry de CAPTCHA inválido na busca (bug de '0 resultados').
+
+    Log real: a pesquisa de 01/01/2026 a 31/03/2026 retornou 0 processos
+    porque o OCR errou o CAPTCHA; o SEI respondeu 200 OK com
+    "Código de confirmação inválido 1." dentro de `.sem-resultado`.
+    """
+
+    def test_captcha_invalido_repete_busca_e_encontra_resultados(self):
+        client = _CaptchaRetryClient([
+            {"html": CAPTCHA_ERROR_HTML},
+            {"html": _result_rows(_numbers(0, 3))},
+        ])
+        results = client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
+        self.assertEqual(len(results), 3)
+        self.assertEqual(client.page.submits, 2)
+        # 1 captcha antes do 1º submit + 1 novo antes do retry.
+        self.assertEqual(client.captcha_calls, 2)
+
+    def test_captcha_invalido_repreenche_criterios_no_retry(self):
+        """A unidade/órgão podem se perder no reload do SEI: repreencher."""
+        client = _CaptchaRetryClient([
+            {"html": CAPTCHA_ERROR_HTML},
+            {"html": _result_rows(_numbers(0, 3))},
+        ])
+        client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
+        self.assertEqual(client.criteria_calls, 2)
+
+    def test_captcha_invalido_persistente_falha_com_erro_explicito(self):
+        """Nunca devolver 0 silencioso: esgotar tentativas e avisar."""
+        client = _CaptchaRetryClient([{"html": CAPTCHA_ERROR_HTML}])
+        with self.assertRaisesRegex(RuntimeError, "CAPTCHA"):
+            client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
+        self.assertEqual(client.page.submits, MAX_RETRIES)
+
+    def test_resultado_vazio_legitimo_nao_repete(self):
+        """Busca sem resultados no período é válida — não é CAPTCHA ruim."""
+        client = _CaptchaRetryClient([
+            {"html": "<div class='sem-resultado'><p>Nenhum documento.</p></div>"},
+        ])
+        results = client.search_processes("MMULHERES", "U", "01/01/2026", "31/03/2026")
+        self.assertEqual(results, [])
+        self.assertEqual(client.page.submits, 1)
+
+    def test_captcha_invalido_na_paginacao_repete_a_pagina(self):
+        client = _CaptchaRetryClient(
+            [{"html": _result_rows(_numbers(0, 50))}],
+            scripted_pages=[
+                {"html": CAPTCHA_ERROR_HTML},
+                {"html": _result_rows(_numbers(50, 20))},
+            ],
+        )
+        results = client.search_processes("MMULHERES", "U", "01/09/2026", "22/09/2026")
+        self.assertEqual(len(results), 70)
+
+    def test_captcha_invalido_persistente_na_paginacao_falha(self):
+        client = _CaptchaRetryClient(
+            [{"html": _result_rows(_numbers(0, 50))}],
+            scripted_pages=[{"html": CAPTCHA_ERROR_HTML}],
+        )
+        with self.assertRaisesRegex(RuntimeError, "CAPTCHA"):
+            client.search_processes("MMULHERES", "U", "01/09/2026", "22/09/2026")
 
 
 class _HeaderPage:

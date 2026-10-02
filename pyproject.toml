@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sei-insights"
 version = "0.1.0"
-description = "Acompanhamento dos processos públicos da unidade MMULHERES-SE-SGA-CGATI-CTI-DTI no SEI/ColaboraGov"
+description = "Acompanhamento dos processos públicos da unidade MMULHERES-SE-SGA-CGATI-CTI no SEI/ColaboraGov"
 requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["dependencies"]

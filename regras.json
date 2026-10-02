@@ -1,9 +1,9 @@
 {
   "fallback": {
-    "situacao": "Em análise",
+    "situacao": "Verificar manualmente",
     "destino": "",
     "acao_esperada": "",
-    "pendencia_curta": ""
+    "pendencia_curta": "Destino não identificado - verificar manualmente"
   },
   "siglas": {
     "ministério das mulheres": "MMULHERES",
@@ -14,7 +14,15 @@
     "divisão de tecnologia da informação": "DTI",
     "coordenação de patrimônio e serviços gerais": "CPSG",
     "coordenação de sistemas e soluções de tecnologia da informação": "COSIS",
-    "coordenação-geral de tecnologia da informação": "CGTI"
+    "coordenação-geral de tecnologia da informação": "CGTI",
+    "coordenação-geral de administração e orçamento": "CGAO",
+    "coordenação-geral de gestão estratégica": "CGGE",
+    "coordenação de governança, prestação de contas e planejamento estratégico": "CGPCE",
+    "coordenação de gestão de pessoas": "CGP",
+    "coordenação de orçamento e finanças": "COF",
+    "coordenação de contratação e logística": "CCL",
+    "assessoria especial de controle interno": "AECI",
+    "divisão de material e de patrimônio": "DIMAP"
   },
   "regras": [
     {
@@ -67,7 +75,7 @@
       "pendencia_curta": "Aguardando retorno do destinatário"
     },
     {
-      "pattern": "(?:en[ -]*caminha[ -]*se|en[ -]*caminham[ -]*se|en[ -]*caminho|remete[ -]*se|remetem[ -]*se|remeto)[\\s\\S]{0,160}?(?:à|a|para)\\s+([A-Za-zÀ-ÿ][\\wÀ-ÿ\\s/()º°+\\-]{2,80}?)\\s*,\\s*para\\s+((?:ciência|conhecimento|análise|avaliação|deliberação|manifestação|validação|adoção|providências?|apreciação)\\b[^\\n]*?)(?:,|\\s+quanto a|\\s+quanto à|\\s+sobre|\\s+acerca|\\s+(?:da|do|de|das|dos)\\b|\\s*$)",
+      "pattern": "(?:en[ -]*caminha[ -]*se|en[ -]*caminham[ -]*se|en[ -]*caminho|remete[ -]*se|remetem[ -]*se|remeto)[\\s\\S]{0,160}?(?:à|a|para)\\s+([A-Za-zÀ-ÿ][\\wÀ-ÿ\\s/()º°+\\-]{2,80}?)\\s*,\\s*para\\s+((?:ciência|conhecimento|análise|avaliação|deliberação|manifestação|validação|adoção|providências?|apreciação|publicação|pronunciamento)\\b[^.\\n]*?)(?:,|\\.|\\s+quanto a|\\s+quanto à|\\s+sobre|\\s+acerca|\\s+(?:da|do|de|das|dos)\\b|\\s*$)",
       "situacao": "Encaminhado a \\2",
       "destino": "\\1",
       "acao_esperada": "\\2",
@@ -81,7 +89,14 @@
       "pendencia_curta": "Aguardando \\1 do destinatário"
     },
     {
-      "pattern": "(?:en[ -]*caminha[ -]*se|en[ -]*caminham[ -]*se|remete[ -]*se|remetem[ -]*se)\\s+(?:os autos[\\s\\S]*?\\b)?(?:à|a|para)\\s+([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s+para|\\s*$)",
+      "pattern": "(?:en[ -]*encaminho|en[ -]*encaminham[ -]*se|en[ -]*caminho|remoto|remete[ -]*se)[\\s,]*para\\s+((?:ciência|conhecimento|análise|apreciação|avaliação|deliberação|validação|pronunciamento|parecer|manifestação|adoção|providências?|publicação)(?:\\s+e\\s+(?:providências|ciência|conhecimento|análise|apreciação|avaliação|deliberação|validação|adoção|publicação))?)",
+      "situacao": "Encaminhado a \\1",
+      "destino": "",
+      "acao_esperada": "\\1",
+      "pendencia_curta": "Aguardando \\1 do destinatário"
+    },
+    {
+      "pattern": "(?:en[ -]*caminha[ -]*se|en[ -]*caminham[ -]*se|remete[ -]*se|remetem[ -]*se)\\s+(?:os autos[\\s\\S]*?\\b)?(?:à|a|para)\\s+(?!(?:Portaria|Of[íi]cio|Processo|Despacho|Memorando|Nota|Documento|Contrato|Edital|Requerimento)\\b)([A-Za-zÀ-ÿ\\s\\/\\-]+?)(?:,|\\.|\\s+para|\\s*$)",
       "situacao": "Encaminhado a \\1",
       "destino": "\\1",
       "acao_esperada": "análise e providências",
@@ -96,13 +111,15 @@
     },
     {
       "pattern": "(?:determino|determina[\\- ]?se|determinam[\\- ]?se)\\s+o\\s+arquivamento",
+      "terminal": true,
       "situacao": "Arquivado",
       "destino": "",
       "acao_esperada": "arquivamento",
       "pendencia_curta": "Processo determinado para arquivamento"
     },
     {
-      "pattern": "(?:arquive[\\- ]?se|pelo arquivamento|determino arquivamento)",
+      "pattern": "(?:arquive[\\- ]?se|pelo arquivamento|determino arquivamento|solicit(?:o|a|amos|am)\\s+o\\s+arquivamento|requeiro\\s+o\\s+arquivamento)",
+      "terminal": true,
       "situacao": "Arquivado",
       "destino": "",
       "acao_esperada": "arquivamento",
@@ -165,18 +182,45 @@
       "pendencia_curta": "Despacho sugere retomada oportuna da demanda (avaliação futura)"
     },
     {
-      "pattern": "\\b(SGA|CCL|CTI|SCL|SG|COORDENA[ÇC][ÃA]O|DIRETORIA|SECRETARIA|SUPERINTEND[ÊE]NCIA|GER[ÊE]NCIA|ASSESSORIA|N[ÚU]CLEO|DIVIS[ÃA]O|DEPARTAMENTO)\\b",
-      "situacao": "Em \\1",
-      "destino": "\\1",
-      "acao_esperada": "análise",
-      "pendencia_curta": "Processo com \\1 para análise/próximo passo"
+      "pattern": "(?:termo de encerramento(?: de processo)?|processo (?:cumpr|cumpri)\\w* seu objetivo|procedo(?:| a) ao seu encerramento|procede-se ao encerramento(?: do processo)?|encerram[\\- ]?se\\s+os\\s+autos|conclu[íi]das?\\s+todas\\s+as\\s+etapas)",
+      "terminal": true,
+      "situacao": "Encerrado",
+      "destino": "",
+      "acao_esperada": "nenhuma (processo encerrado)",
+      "pendencia_curta": "Processo encerrado, sem ação pendente"
     },
     {
-      "pattern": "\\b((?:Minist[ée]rio P[úu]blico|Tribunal de Contas|Controladoria|Pol[íi]cia Federal|Receita Federal|INSS|AGU|PGFN|DPF|MPF|MPDFT|TCU|CGU|CGM))\\b",
-      "situacao": "Encaminhado a órgão externo (\\1)",
+      "pattern": "\\b(SGA|CCL|CTI|SCL|SG|COORDENA[ÇC][ÃA]O|DIRETORIA|SECRETARIA|SUPERINTEND[ÊE]NCIA|GER[ÊE]NCIA|ASSESSORIA|N[ÚU]CLEO|DIVIS[ÃA]O|DEPARTAMENTO)\\b",
+      "pattern_sem_cabecalho": "\\b(SGA|CCL|CTI|SCL|SG)\\b",
+      "fraseia_cabecalho": true,
+      "situacao": "Em {destino}",
+      "destino": "\\1",
+      "acao_esperada": "análise",
+      "pendencia_curta": "Processo com {destino} para análise/próximo passo"
+    },
+    {
+      "pattern": "(?<![\\w/.])((?:Minist[ée]rio P[úu]blico|Tribunal de Contas|Controladoria|Pol[íi]cia Federal|Receita Federal|INSS|AGU|PGFN|DPF|MPF|MPDFT|TCU|CGU|CGM))(?![\\w/])",
+      "upper_captura": true,
+      "situacao": "Em órgão externo (\\1)",
       "destino": "\\1",
       "acao_esperada": "providências",
       "pendencia_curta": "Órgão externo \\1 para análise/providências"
+    },
+    {
+      "pattern": "(?<![A-Za-zÀ-ÿ])((?:Minist[ée]rio P[úu]blico|Tribunal de Contas|Controladoria|Pol[íi]cia Federal|Receita Federal|INSS|AGU|PGFN|DPF|MPF|MPDFT|TCU|CGU|CGM))(?![A-Za-zÀ-ÿ])",
+      "requer_sem_cabecalho": true,
+      "upper_captura": true,
+      "situacao": "Em órgão externo (\\1)",
+      "destino": "\\1",
+      "acao_esperada": "providências",
+      "pendencia_curta": "Órgão externo \\1 para análise/providências"
+    },
+    {
+      "pattern": "(?<![\\w/])(?:outros?\\s+|demais\\s+)?órg[ãa]os?\\s+externos?(?![\\w/])",
+      "situacao": "Em órgão externo",
+      "destino": "",
+      "acao_esperada": "providências",
+      "pendencia_curta": "Processo em órgão externo para análise/providências"
     }
   ]
 }

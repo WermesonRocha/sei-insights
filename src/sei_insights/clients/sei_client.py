@@ -16,8 +16,12 @@ from sei_insights.config import DEFAULT_TIMEOUT_MS
 
 from sei_insights.clients.captcha_solver import CaptchaSolver
 from sei_insights.clients.discovery import (
+    PROCESS_NUMBER_PATTERN,
+    _numero_processo_da_linha,
+    count_rows,
     expected_total,
     extract_process_number,
+    is_captcha_error,
     pagination_params,
     parse_response,
 )
@@ -94,14 +98,96 @@ def _unidade_matches(candidate: str, wanted: str) -> bool:
 
 
 def _is_process_number(value: str) -> bool:
-    """Diz se o valor parece um número de processo SEI (NNNNN.NNNNNN/YYYY-NN).
+    """Diz se o valor parece um número de processo SEI.
+
+    Reusa `discovery.PROCESS_NUMBER_PATTERN` em vez de repetir o formato aqui.
+    Havia uma segunda cópia deste padrão neste arquivo, com a largura de prefixo
+    divergente da de lá: as duas divergiam para o mesmo texto, e foi
+    assim que um número de processo válido passou a ser truncado num número
+    que não existe. Formato tem um lugar só.
 
     Linhas de documento da busca têm `data-prot` = número do documento
     (ex.: 64534686), que não casa com o formato de processo; usamos isso
     para preferir o número real de processo quando navegamos o mesmo link.
     """
-    return bool(re.fullmatch(r"\d{4,5}\.\d{6,8}/\d{4}-\d{2}",
-                             normalize_process_number(value)))
+    return bool(
+        re.fullmatch(
+            PROCESS_NUMBER_PATTERN,
+            normalize_process_number(value),
+        )
+    )
+
+
+class CriteriosNaoAplicados(RuntimeError):
+    """A busca foi impedida porque algum critério não ficou marcado."""
+
+
+# Os três tipos que a pesquisa pública cobre. Sem qualquer um deles o SEI
+# devolve um recorte diferente do pedido.
+CRITERIOS_OBRIGATORIOS = (
+    "chkSinProcessos",
+    "chkSinDocumentosGerados",
+    "chkSinDocumentosRecebidos",
+)
+
+
+def criterios_faltantes(estado: dict, orgao_esperado: str,
+                        unidade: str) -> list[str]:
+    """Lista o que NÃO ficou marcado. Lista vazia = a busca pode começar.
+
+    `estado` é o que o DOM mostra depois de preencher o formulário:
+    `checkboxes` (nome -> marcado), `orgao` (valores selecionados),
+    `unidade_id` (#hdnIdUnidade) e `unidade_texto` (#txtUnidade).
+
+    O id da unidade é o que o SEI usa para filtrar (spike:111): vazio, a
+    busca sai sem restrição de unidade e devolve o órgão inteiro, o que é
+    pior que não devolver nada — parece resultado e não é.
+    """
+    faltando: list[str] = []
+
+    for nome, marcado in (estado.get("checkboxes") or {}).items():
+        if not marcado:
+            faltando.append(f"checkbox {nome} desmarcado")
+    if len((estado.get("checkboxes") or {})) < len(CRITERIOS_OBRIGATORIOS):
+        faltando.append("um ou mais checkboxes de tipo de pesquisa ausentes")
+
+    if not orgao_esperado:
+        faltando.append(
+            "órgão sem valor em ORGAO_VALUES — não é possível confirmar a seleção"
+        )
+    elif str(orgao_esperado) not in {str(v) for v in (estado.get("orgao") or [])}:
+        faltando.append(f"órgão {orgao_esperado} não está selecionado")
+
+    if not str(estado.get("unidade_id") or "").strip():
+        faltando.append(
+            "unidade geradora não aplicada (#hdnIdUnidade vazio: a busca "
+            "rodaria sem filtro de unidade)"
+        )
+    elif not _unidade_confere(
+            _normalize_unidade_label(str(estado.get("unidade_texto") or "")),
+            _normalize_unidade_label(unidade),
+    ):
+        faltando.append(
+            f"unidade no formulário é {estado.get('unidade_texto')!r}, "
+            f"esperada {unidade!r}"
+        )
+
+    return faltando
+
+
+def _unidade_confere(candidate: str, wanted: str) -> bool:
+    """Compara o CÓDIGO da unidade de forma estrita.
+
+    `_unidade_matches` (usada no autocomplete) aceita substring, e aí
+    `MMULHERES-SE-SGA-CGATI-CTI-DTI` casa com `...-CTI`: a unidade legada
+    passaria pela verificação e a busca voltaria 0 processos sem erro nenhum.
+    O SEI exibe "código - nome", então o código é a parte antes do " - ".
+    """
+    if not candidate or not wanted:
+        return False
+    codigo = " ".join(candidate.split(" - ")[0].split())
+    alvo = " ".join(wanted.split(" - ")[0].split())
+    return codigo == alvo
 
 
 @dataclass(slots=True)
@@ -119,19 +205,42 @@ class PublicDocument:
 
 
 def extract_process(html: str, requested_number: str) -> Optional[ProcessResult]:
-    """Extrai processo do HTML correspondente ao número solicitado."""
+    """Extrai processo do HTML correspondente ao número solicitado.
+
+    O SEI não marca o número do PROCESSO em `data-prot`: ele traz o número do
+    DOCUMENTO (61941158). O número do processo está no texto da linha de
+    resultado, no formato NNNNN.NNNNNN/YYYY-NN (ver
+    `discovery._numero_processo_da_linha`, que faz a mesma leitura).
+
+    Procurar só por `data-prot` não achava nada: o resultado era `url=""` e a
+    navegação seguinte falhava com "Cannot navigate to invalid URL" para todos
+    os processos da busca.
+    """
     soup = BeautifulSoup(html, "html.parser")
-    # Tenta encontrar pelo atributo data-prot
+    numero = normalize_process_number(requested_number)
+
+    # 1. data-prot já no formato de processo (variante que o SEI usa em
+    #    algumas telas).
     for row in soup.select("[data-prot]"):
-        prot = row.get("data-prot", "").strip()
-        if normalize_process_number(prot) == normalize_process_number(requested_number):
+        prot = normalize_process_number(row.get("data-prot", "").strip())
+        if prot == numero:
             link = row.select_one("a[href*='md_pesq_processo_exibir.php']")
             if link:
-                return ProcessResult(
-                    number=normalize_process_number(requested_number),
-                    url=link.get("href", ""),
-                    title=link.get_text(strip=True)
-                )
+                return ProcessResult(number=numero,
+                                     url=link.get("href", ""),
+                                     title=link.get_text(strip=True))
+
+    # 2. Número do processo no TEXTO da linha de resultado, que é onde o SEI o
+    #    coloca de fato.
+    for row in soup.select("tr, [data-prot]"):
+        link = row.select_one("a[href*='md_pesq_processo_exibir.php']")
+        if link is None:
+            continue
+        achado = _numero_processo_da_linha(row)
+        if achado and normalize_process_number(achado) == numero:
+            return ProcessResult(number=numero,
+                                 url=link.get("href", ""),
+                                 title=link.get_text(strip=True))
     return None
 
 
@@ -499,6 +608,67 @@ class SeiClient:
         if not found:
             logger.warning("Campo %s não encontrado.", name)
 
+    def _verify_search_criteria(self, orgao: str, unidade: str) -> None:
+        """Impede a busca se algum critério não ficou marcado de fato.
+
+        Os caminhos de preenchimento degradavam em silêncio (órgão não
+        mapeado -> todos os órgãos; unidade não resolvida -> segue sem
+        filtro). Cada degradação muda o recorte do resultado sem gerar erro,
+        e uma busca sem unidade parece uma busca completa. Aqui o que vale é
+        o DOM, não a intenção: se não dá para ler marked, a busca não sai.
+        """
+        estado = self.page.evaluate(
+            """(names) => {
+                const out = {checkboxes: {}, orgao: [],
+                             unidade_id: '', unidade_texto: ''};
+                for (const n of names) {
+                    const el = document.getElementById(n)
+                        || document.querySelector(
+                            "input[name='" + n + "']");
+                    out.checkboxes[n] = !!(el && el.checked);
+                }
+                const sel = document.getElementById('selOrgaoPesquisa');
+                if (sel) {
+                    if (sel.multipleSelect
+                        && typeof sel.multipleSelect === 'function') {
+                        out.orgao = sel.multipleSelect('getSelects') || [];
+                    } else if (sel.selectedOptions) {
+                        out.orgao = Array.from(sel.selectedOptions)
+                            .map((o) => o.value);
+                    } else if (sel.value) {
+                        out.orgao = [sel.value];
+                    }
+                }
+                const hdn = document.getElementById('hdnIdUnidade');
+                const txt = document.getElementById('txtUnidade');
+                out.unidade_id = (hdn && hdn.value || '').trim();
+                out.unidade_texto = (txt && txt.value || '').trim();
+                return out;
+            }""",
+            list(CRITERIOS_OBRIGATORIOS),
+        )
+
+        faltando = criterios_faltantes(
+            estado, ORGAO_VALUES.get(orgao.strip().upper(), ""), unidade,
+        )
+        if not faltando:
+            logger.info(
+                "Critérios confirmados no formulário: órgão %s, unidade %r, "
+                "P+G+R marcados.", orgao, unidade,
+            )
+            return
+
+        self.save_debug("criterios_incompletos")
+        raise CriteriosNaoAplicados(
+            "A busca NÃO foi feita: o SEI não ficou com todos os critérios "
+            "necessários. Sem isso o resultado seria de outro recorte "
+            "(com a unidade vazia, o SEI devolve o órgão inteiro).\n"
+            "Faltou:\n  - " + "\n  - ".join(faltando) + "\n"
+            f"Esperado: órgão {orgao!r}, unidade {unidade!r} e os três tipos "
+            "de pesquisa (Processos, Documentos Gerados, Documentos "
+            "Recebidos). Verifique .state/debug/criterios_incompletos.*"
+        )
+
     def _set_search_criteria(self, orgao: str, unidade: str,
                              inicio: str, fim: str) -> None:
         """Define critérios de pesquisa per spike (docs/spike-2026-09-22.md).
@@ -605,6 +775,11 @@ class SeiClient:
                 f.first.fill(field_value)
             else:
                 logger.warning("Campo de data %s não encontrado.", field)
+
+        # Barreira: só a busca em si decide se os critérios pegaram. Fica no
+        # fim de propósito — cobre todos os caminhos de degradação acima sem
+        # espalhar raise por cada um deles.
+        self._verify_search_criteria(orgao, unidade)
 
     def _fetch_page(self, inicio: int, page_size: int) -> dict:
         """Busca uma página de resultados via POST AJAX (pagination)."""
@@ -833,19 +1008,8 @@ class SeiClient:
             "() => (document.getElementById('hdnIdUnidade') || {}).value || ''"
         )
 
-    def search_processes(self, orgao: str, unidade: str,
-                         inicio: str, fim: str, page_size: int = 50) -> list[ProcessResult]:
-        """Pesquisa processos por órgão/unidade/período e pagina os resultados."""
-        self.open_search_page()
-
-        # Segue o coletor (main.py:3590-3621): o CAPTCHA é resolvido antes
-        # de qualquer requisição de pesquisa ao SEI, inclusive o POST de
-        # autocomplete de unidade feito dentro de _set_search_criteria.
-        self.solve_search_captcha()
-
-        self._set_search_criteria(orgao, unidade, inicio, fim)
-        results: dict[str, ProcessResult] = {}
-
+    def _submit_and_read(self) -> dict:
+        """Clica em Pesquisar e devolve o JSON da resposta AJAX."""
         try:
             with self.page.expect_response(
                 SeiClient.is_search_response,
@@ -868,7 +1032,7 @@ class SeiClient:
                     f"Resposta:\n{body[:3000]}"
                 )
 
-            data = response.json()
+            return response.json()
         except RuntimeError:
             raise
         except Exception as exc:
@@ -883,34 +1047,145 @@ class SeiClient:
             except Exception:
                 pass
 
+    def search_processes(self, orgao: str, unidade: str,
+                         inicio: str, fim: str, page_size: int = 50) -> list[ProcessResult]:
+        """Pesquisa processos por órgão/unidade/período e pagina os resultados.
+
+        Um CAPTCHA rejeitado pelo SEI chega como HTTP 200 com HTML de erro
+        (`.sem-resultado` + "Código de confirmação inválido"), não como 4xx.
+        Sem retry, o parser lê zero processos e a execução reporta período
+        "sem resultados" — o bug real que esvaziou a planilha. Aqui cada
+        tentativa recarrega o CAPTCHA (`updateCaptcha()` no `.always()` do
+        SEI) e refaz os critérios; esgotadas as tentativas, falha explícito
+        em vez de devolver lista vazia.
+        """
+        self.open_search_page()
+
+        # Segue o coletor (main.py:3590-3621): o CAPTCHA é resolvido antes
+        # de qualquer requisição de pesquisa ao SEI, inclusive o POST de
+        # autocomplete de unidade feito dentro de _set_search_criteria.
+        self.solve_search_captcha()
+        self._set_search_criteria(orgao, unidade, inicio, fim)
+
+        data: dict = {}
+        for attempt in range(1, MAX_RETRIES + 1):
+            data = self._submit_and_read()
+            if not is_captcha_error(data):
+                break
+            logger.warning(
+                "CAPTCHA rejeitado pelo SEI (tentativa %d/%d). "
+                "Resolvendo um novo CAPTCHA e refazendo a busca.",
+                attempt, MAX_RETRIES,
+            )
+            self.save_debug(f"captcha_invalido_{attempt}")
+            if attempt >= MAX_RETRIES:
+                raise RuntimeError(
+                    f"O SEI rejeitou o CAPTCHA {MAX_RETRIES} vezes seguidas. "
+                    "A busca foi interrompida para não reportar "
+                    "'nenhum resultado' indevidamente — tente novamente "
+                    "(opção --manual-captcha resolve OCRs difíceis)."
+                )
+            self.solve_search_captcha()
+            self._set_search_criteria(orgao, unidade, inicio, fim)
+
+        results: dict[str, ProcessResult] = {}
         page_numbers = parse_response(data)
         for number in page_numbers:
             self._add_result(results, number, data)
 
-        page = page_size
+        pages = 1
 
-        # Contrato real do SEI (spike:100,126,212): a resposta AJAX traz
-        # apenas {"html": ...}, sem campo itens, então expected_total é 0.
-        # Paginamos enquanto a última página devolveu uma página cheia;
-        # paramos na primeira página curta ou vazia. expected_total serve
-        # só como limite adicional quando itens existe e o safety valve
-        # evita paginação infinita.
-        while len(page_numbers) == page_size:
-            self.solve_search_captcha()
-            page_data = self._fetch_page(page, page_size)
+        # `data.itens` é o TOTAL de linhas que o SEI encontrou, e é o campo
+        # que o próprio JS da página usa para paginar:
+        #     var qtdeItens = 0; ... qtdeItens = data.itens;
+        #     function verificarRegistros(){ ... if(totalTela < 10 && buscaInicio < qtdeItens){...} }
+        # Ele manda na paginação: o tamanho da página conta LINHAS, não
+        # processos (a pesquisa marca P+G+R e documentos do mesmo processo
+        # repetem o número), então uma página pode vir curta e ainda assim
+        # haver muito mais resultado. Encerrar em "página cheia" truncava a
+        # busca na primeira página sem aviso.
+        # Quando `itens` não vem (resposta de CAPTCHA rejeitado, que não tem o
+        # campo), cai no critério antigo de página cheia.
+        total = expected_total(data)
+        rows = count_rows(data)
+        read_rows = rows
+        logger.info(
+            "SEI informou %d resultado(s) no total; a primeira página trouxe %d linha(s).",
+            total, rows,
+        )
+        if page_numbers:
+            logger.info(
+                "  página 1: offset 0, %d linha(s), processo(s) %s .. %s",
+                rows, page_numbers[0], page_numbers[-1],
+            )
+        # O próximo offset avança pelas LINHAS realmente lidas, nunca por
+        # `page_size`. Uma página pode vir curta (47 linhas de 50) e um salto
+        # fixo de 50 pularia as linhas de offset 47..49 para sempre — no caso
+        # real de 01/01/2026 a 31/03/2026 foram 180 linhas lidas contra 183
+        # informadas. Somando o tamanho real da página anterior, nenhum
+        # offset é pulado, e a página cheia continua avançando 50 como antes.
+        page = rows
+        while rows and (page < total if total > 0 else rows >= page_size):
+            page_data = self._fetch_page_with_captcha_retry(page, page_size)
+            rows = count_rows(page_data)
             page_numbers = parse_response(page_data)
             if not page_numbers:
+                logger.warning(
+                    "A página que começava no offset %d voltou sem processos e a "
+                    "busca parou aqui (de %d linhas informadas). Se o SEI tem mais "
+                    "resultados, a coleta ficou truncada.",
+                    page, total or -1,
+                )
                 break
+            pages += 1
             for number in page_numbers:
                 self._add_result(results, number, page_data)
-            total_known = expected_total(page_data)
-            if total_known and len(results) >= total_known:
-                break
-            page += page_size
+            read_rows += rows
+            logger.info(
+                "  página %d: offset %d, %d linha(s), processo(s) %s .. %s "
+                "(acumulado %d/%s linha(s))",
+                pages, page, rows, page_numbers[0], page_numbers[-1],
+                read_rows, total or "?",
+            )
+            page += rows
             if page > page_size * 50:  # safety valve
                 break
 
+        logger.info(
+            "Busca concluída: %d página(s) lida(s), %d processo(s) único(s), "
+            "%d linha(s) lida(s) de %s informada(s).",
+            pages, len(results), read_rows, total or "?",
+        )
+        if total > 0 and page < total:
+            logger.warning(
+                "A busca terminou no offset %d, mas o SEI informou %d resultado(s): "
+                "a coleta pode estar incompleta.", page, total,
+            )
         return list(results.values())
+
+    def _fetch_page_with_captcha_retry(self, inicio: int, page_size: int) -> dict:
+        """Busca uma página paginada, refazendo o CAPTCHA se for rejeitado.
+
+        A paginação do SEI também valida o CAPTCHA; um erro aqui não pode
+        virar "página vazia" silencioso (aí o loop pararia com metades dos
+        processos). Após MAX_RETRIES, falha explícito.
+        """
+        for attempt in range(1, MAX_RETRIES + 1):
+            self.solve_search_captcha()
+            data = self._fetch_page(inicio, page_size)
+            if not is_captcha_error(data):
+                return data
+            logger.warning(
+                "CAPTCHA rejeitado pelo SEI na paginação (tentativa %d/%d).",
+                attempt, MAX_RETRIES,
+            )
+            if attempt >= MAX_RETRIES:
+                raise RuntimeError(
+                    f"O SEI rejeitou o CAPTCHA {MAX_RETRIES} vezes seguidas "
+                    f"ao paginar (inicio={inicio}). A busca foi interrompida "
+                    "para não truncar silenciosamente os resultados."
+                )
+        raise RuntimeError("Paginação sem resposta válida do SEI.")
 
     def open_process(self, process: ProcessResult) -> str:
         """Abre página do processo e retorna o HTML."""
@@ -1194,6 +1469,10 @@ class SeiClient:
         restrito ou a tabela não expôs o Despacho): quem chamou deve tratá-lo
         como "Sem despacho público". Erros reais de download levantam
         RuntimeError.
+
+        Consequência esperada na planilha: estes processos são gravados sem
+        PDF, então a quantidade de arquivos em downloads/ é menor que a de
+        registros. Ver a nota completa em cli.py (analyze_one).
         """
         logger.info(
             "Baixando despacho %s (último Despacho em #tblDocumentos)...",
